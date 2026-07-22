@@ -5,6 +5,7 @@ import shutil
 import sys
 import time
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -40,6 +41,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 
+def atomic_torch_save(payload, path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, path)
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Huấn luyện AI phân tầng")
     parser.add_argument("--epochs", type=int, default=int(os.getenv("EPOCHS", 15)))
@@ -58,7 +66,10 @@ def parse_args():
     parser.add_argument("--label-smoothing", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-name")
-    parser.add_argument("--resume")
+    parser.add_argument(
+        "--resume",
+        help="Resume từ last_checkpoint.pth hoặc best_model.pth; epochs là tổng mục tiêu.",
+    )
 
     subparsers = parser.add_subparsers(dest="task", required=True)
     subparsers.add_parser("router", help="Huấn luyện nhận diện 5 nhóm")
@@ -184,7 +195,12 @@ def main():
             raise SystemExit("Expert cần ít nhất hai mức độ tươi có dữ liệu.")
 
     category = getattr(args, "category", None)
-    run_dir = create_run_directory(args.task, category, args.model, args.run_name)
+    resume_path = Path(args.resume).resolve() if args.resume else None
+    run_dir = (
+        resume_path.parent
+        if resume_path is not None
+        else create_run_directory(args.task, category, args.model, args.run_name)
+    )
     device_name = torch.cuda.get_device_name(0) if USE_CUDA else "CPU"
     config = {
         **vars(args),
@@ -212,17 +228,20 @@ def main():
 
     model = create_model(len(classes), args.model, pretrained=True)
     model = configure_training_method(model, args.model, args.method).to(DEVICE)
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location=DEVICE, weights_only=False)
-        model.load_state_dict(checkpoint["state_dict"])
-        print(f"Resume weights: {args.resume}")
+    resume_checkpoint = None
+    if resume_path is not None:
+        resume_checkpoint = torch.load(
+            resume_path, map_location=DEVICE, weights_only=False
+        )
+        model.load_state_dict(resume_checkpoint["state_dict"])
+        print(f"Resume checkpoint: {resume_path}")
     if USE_CUDA:
         model = model.to(memory_format=torch.channels_last)
 
     parameters = trainable_parameters(model)
     config["total_parameters"] = sum(parameter.numel() for parameter in model.parameters())
     config["trainable_parameters"] = sum(parameter.numel() for parameter in parameters)
-    tracker = ExperimentTracker(run_dir, config)
+    tracker = ExperimentTracker(run_dir, config, resume=resume_path is not None)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     optimizer = build_optimizer(args, parameters)
@@ -234,14 +253,63 @@ def main():
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     scaler = torch.amp.GradScaler("cuda", enabled=USE_CUDA)
 
+    start_epoch = 1
     best_loss = float("inf")
     best_valid_accuracy = 0.0
     best_epoch = 0
     stale_epochs = 0
+    if resume_checkpoint is not None:
+        if resume_checkpoint.get("optimizer_state_dict"):
+            optimizer.load_state_dict(resume_checkpoint["optimizer_state_dict"])
+        if resume_checkpoint.get("scheduler_state_dict"):
+            scheduler.load_state_dict(resume_checkpoint["scheduler_state_dict"])
+        if resume_checkpoint.get("scaler_state_dict"):
+            scaler.load_state_dict(resume_checkpoint["scaler_state_dict"])
+        start_epoch = int(resume_checkpoint.get("epoch", 0)) + 1
+        best_loss = float(resume_checkpoint.get("best_loss", best_loss))
+        best_valid_accuracy = float(
+            resume_checkpoint.get("best_valid_accuracy", best_valid_accuracy)
+        )
+        best_epoch = int(resume_checkpoint.get("best_epoch", best_epoch))
+        stale_epochs = int(resume_checkpoint.get("stale_epochs", stale_epochs))
+        if resume_checkpoint.get("rng_state") is not None:
+            random.setstate(resume_checkpoint["rng_state"])
+        if resume_checkpoint.get("torch_rng_state") is not None:
+            torch.set_rng_state(resume_checkpoint["torch_rng_state"])
+        if USE_CUDA and resume_checkpoint.get("cuda_rng_state_all") is not None:
+            torch.cuda.set_rng_state_all(resume_checkpoint["cuda_rng_state_all"])
+        print(f"Continuing at epoch {start_epoch}/{args.epochs}")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     run_checkpoint = run_dir / "best_model.pth"
+    last_checkpoint = run_dir / "last_checkpoint.pth"
 
-    for epoch in range(1, args.epochs + 1):
+    def checkpoint_payload(epoch):
+        return {
+            "state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "epoch": epoch,
+            "best_loss": best_loss,
+            "best_valid_accuracy": best_valid_accuracy,
+            "best_epoch": best_epoch,
+            "stale_epochs": stale_epochs,
+            "classes": classes,
+            "task": args.task,
+            "category": category,
+            "model_name": args.model,
+            "training_method": args.method,
+            "config": config,
+            "rng_state": random.getstate(),
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": torch.cuda.get_rng_state_all() if USE_CUDA else None,
+        }
+
+    if not last_checkpoint.exists():
+        atomic_torch_save(checkpoint_payload(start_epoch - 1), last_checkpoint)
+
+    for epoch in range(start_epoch, args.epochs + 1):
         started = time.perf_counter()
         train_loss, train_acc, _ = run_epoch(
             model, train_loader, criterion, len(classes), optimizer, scaler
@@ -256,17 +324,6 @@ def main():
             best_valid_accuracy = valid_acc
             best_epoch = epoch
             stale_epochs = 0
-            checkpoint = {
-                "state_dict": model.state_dict(),
-                "classes": classes,
-                "task": args.task,
-                "category": category,
-                "model_name": args.model,
-                "training_method": args.method,
-                "config": config,
-            }
-            torch.save(checkpoint, run_checkpoint)
-            shutil.copy2(run_checkpoint, output_path)
         else:
             stale_epochs += 1
 
@@ -288,6 +345,12 @@ def main():
         else:
             scheduler.step()
 
+        checkpoint = checkpoint_payload(epoch)
+        atomic_torch_save(checkpoint, last_checkpoint)
+        if improved:
+            atomic_torch_save(checkpoint, run_checkpoint)
+            shutil.copy2(run_checkpoint, output_path)
+
         print(
             f"Epoch {epoch:02d}/{args.epochs} | "
             f"train {train_acc:.2f}%/{train_loss:.4f} | "
@@ -300,7 +363,8 @@ def main():
             print("Early stopping: 3 epoch không cải thiện.")
             break
 
-    checkpoint = torch.load(run_checkpoint, map_location=DEVICE, weights_only=False)
+    evaluation_checkpoint = run_checkpoint if run_checkpoint.exists() else last_checkpoint
+    checkpoint = torch.load(evaluation_checkpoint, map_location=DEVICE, weights_only=False)
     model.load_state_dict(checkpoint["state_dict"])
     test_loss, test_acc, confusion = run_epoch(
         model, test_loader, criterion, len(classes)
@@ -315,6 +379,7 @@ def main():
         **report,
         "deployed_checkpoint": str(output_path),
         "run_checkpoint": str(run_checkpoint),
+        "last_checkpoint": str(last_checkpoint),
     }
     tracker.save_summary(summary)
 

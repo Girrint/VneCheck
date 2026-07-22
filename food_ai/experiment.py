@@ -32,12 +32,13 @@ class ExperimentTracker:
         "saved",
     )
 
-    def __init__(self, run_dir, config):
+    def __init__(self, run_dir, config, resume=False):
         self.run_dir = run_dir
         self.metrics_path = run_dir / "metrics.csv"
-        write_json(run_dir / "config.json", config)
-        with self.metrics_path.open("w", newline="", encoding="utf-8") as file:
-            csv.DictWriter(file, fieldnames=self.FIELDNAMES).writeheader()
+        if not resume or not self.metrics_path.exists():
+            write_json(run_dir / "config.json", config)
+            with self.metrics_path.open("w", newline="", encoding="utf-8") as file:
+                csv.DictWriter(file, fieldnames=self.FIELDNAMES).writeheader()
 
     def log_epoch(self, row):
         with self.metrics_path.open("a", newline="", encoding="utf-8") as file:

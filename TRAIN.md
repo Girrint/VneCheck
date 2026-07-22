@@ -184,7 +184,24 @@ data/train -> 80% học + 20% test cuối
 data/valid -> chọn model và early stopping
 ```
 
-## 6. Thứ tự huấn luyện đề xuất
+## 6. Resume an toàn
+
+Mỗi run tạo các file:
+
+```text
+runs/<run>/last_checkpoint.pth  # trạng thái mới nhất, lưu sau mỗi epoch
+runs/<run>/best_model.pth       # model tốt nhất theo validation loss
+```
+
+Resume bằng checkpoint mới nhất; `--epochs` là tổng số epoch mục tiêu:
+
+```powershell
+python train.py --epochs 15 --resume runs/<run>/last_checkpoint.pth router
+```
+
+Checkpoint lưu model, optimizer, scheduler, AMP scaler, epoch, metric tốt nhất và random state. Nếu process bị kill giữa epoch, mất tối đa epoch đang chạy; checkpoint cũ vẫn nguyên vẹn.
+
+## 7. Thứ tự huấn luyện đề xuất
 
 1. Phân loại toàn bộ dữ liệu theo năm nhóm.
 2. Train router.
