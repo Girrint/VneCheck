@@ -16,239 +16,130 @@ dataset và có trang trợ giúp bằng tiếng Anh.
 Chạy trong PowerShell tại thư mục dự án:
 
 ```powershell
+if (-not (Test-Path .\.venv\Scripts\python.exe)) {
+    & "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv
+}
 .\.venv\Scripts\Activate.ps1
-uv pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip check
 ```
 
-Kiểm tra PyTorch có nhận GPU NVIDIA:
+Kiểm tra CUDA:
 
 ```powershell
 python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
-Kết quả phải có `True` nếu muốn huấn luyện bằng CUDA.
+Nếu `py` không tồn tại, dùng đường dẫn Python trực tiếp như lệnh tạo venv ở trên.
 
-## 2. Chuẩn bị dữ liệu
+## 2. Trước khi train
 
-Dữ liệu phải có đúng cấu trúc hai tầng:
+Chạy kiểm tra duplicate:
+
+```powershell
+python scripts\check_duplicates.py
+```
+
+Nếu công cụ trả exit code `1`, phải xử lý leakage hoặc ghi nhận rõ đây chỉ là train thử nghiệm. Dataset hiện tại đã có cross-split duplicate.
+
+Chốt contract freshness trước khi train lại. Hiện `gia_cam` và `gia_suc` có 3 lớp; `cu`, `qua`, `rau` có 2 lớp.
+
+## 3. Huấn luyện
+
+Router:
+
+```powershell
+python train.py --epochs 15 --batch-size 16 --workers 0 router
+```
+
+Expert:
+
+```powershell
+python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category gia_suc
+python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category gia_cam
+python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category rau
+python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category cu
+python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category qua
+```
+
+Default thực tế trong `train.py`: epochs `15`, batch size `16`, workers là `min(4, os.cpu_count())`, model `mobilenet_v3_large`, method `fine_tune`, optimizer `adamw`, scheduler `plateau`, learning rate `5e-4`, weight decay `1e-4`, label smoothing `0.05`, seed `42`.
+
+Các lựa chọn model/method:
+
+```powershell
+python train.py --model mobilenet_v3_small --method head_only router
+python train.py --model mobilenet_v3_large --method fine_tune router
+```
+
+## 4. Split và metric
+
+`food_ai.data.create_loaders()` hiện tách ngẫu nhiên 20% từ `data/train` thành test nội bộ bằng seed `42`; `data/valid` được dùng để chọn checkpoint và early stopping. Đây là split theo file, không phải group split, nên không đủ chống leakage.
+
+Train dùng augmentation:
 
 ```text
-data/
-  train/
-    gia_suc/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    gia_cam/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    rau/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    cu/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    qua/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-  valid/
-    ... cùng cấu trúc với train ...
+RandomResizedCrop(224, scale=0.8..1.0)
+RandomHorizontalFlip
+RandomRotation(12)
+ToTensor + ImageNet normalization
 ```
 
-Dữ liệu cũ chưa được xác định nhóm nằm trong:
+Validation/test dùng `Resize(232) + CenterCrop(224) + ToTensor + ImageNet normalization`.
+
+Checkpoint tốt nhất chọn theo validation loss. Báo cáo gồm accuracy, macro-F1, precision/recall/F1 từng lớp và confusion matrix.
+
+## 5. Resume và output
+
+Mỗi run nằm trong `runs/<run>/`:
 
 ```text
-data/unclassified/train/
-data/unclassified/valid/
+config.json
+metrics.csv
+best_model.pth
+last_checkpoint.pth
+summary.json
 ```
 
-Phải phân loại các ảnh này vào đúng nhóm trước khi train. Không đặt cùng một ảnh
-hoặc các bản augmentation của cùng ảnh gốc ở cả `train` và `valid`.
-
-Nếu dataset mới chỉ có train, có thể tách 15% theo từng sản phẩm và mức độ tươi:
+Resume:
 
 ```powershell
-python split_validation.py --categories rau cu qua --ratio 0.15
+python train.py --epochs 15 --resume runs\<run>\last_checkpoint.pth router
 ```
 
-Expert có thể học hai lớp `FRESH/SPOILED` khi dataset không có `HALF-FRESH`.
-Lớp rỗng được bỏ qua tự động và có thể bổ sung sau bằng cách train lại expert.
+`--epochs` là tổng số epoch mục tiêu. Chỉ resume checkpoint cùng task, category, model, class order và training method; code hiện tại chưa tự kiểm tra đầy đủ các metadata này.
 
-## 3. Huấn luyện router
+## 6. Đánh giá
 
-Router nhận diện năm nhóm thực phẩm:
+Router uncertainty:
 
 ```powershell
-python train.py router
+python evaluate_router_uncertainty.py --root data\valid --threshold 0.8
 ```
 
-Model tốt nhất được lưu tại:
-
-```text
-models/router.pth
-```
-
-## 4. Huấn luyện các freshness expert
-
-Mỗi nhóm có một model đánh giá độ tươi riêng:
+End-to-end:
 
 ```powershell
-python train.py freshness --category gia_suc
-python train.py freshness --category gia_cam
-python train.py freshness --category rau
-python train.py freshness --category cu
-python train.py freshness --category qua
+python evaluate_end_to_end.py --root data\valid
 ```
 
-Các model được lưu trong:
+Evaluator end-to-end hiện chưa hỗ trợ dataset có expert 2 lớp và 3 lớp đồng thời; cần sửa contract/evaluator trước khi dùng.
 
-```text
-models/freshness/gia_suc.pth
-models/freshness/gia_cam.pth
-models/freshness/rau.pth
-models/freshness/cu.pth
-models/freshness/qua.pth
-```
-
-## 5. Tùy chỉnh quá trình train
-
-Các tùy chọn chung phải đặt trước tên task:
+Benchmark MobileNetV3:
 
 ```powershell
-python train.py --epochs 20 --batch-size 32 --workers 4 --model mobilenet_v3_large --method fine_tune router
-python train.py --epochs 20 --batch-size 32 --workers 4 --model efficientnet_b0 --method fine_tune freshness --category gia_suc
+python benchmark_mobilenet.py router --epochs 15 --batch-size 16 --workers 0
+python benchmark_mobilenet.py freshness --category cu --epochs 15 --batch-size 16 --workers 0
 ```
 
-Ý nghĩa:
+Không chọn model dựa trên accuracy của split đang leakage.
 
-- `--epochs`: số epoch tối đa, mặc định `15`.
-- `--batch-size`: số ảnh trong mỗi batch, mặc định `32`.
-- `--workers`: số tiến trình nạp dữ liệu, mặc định tối đa `4`.
-- `--model`: kiến trúc model.
-- `--method`: `fine_tune` toàn mạng hoặc `head_only` chỉ classifier.
-- `--optimizer`: `adamw` hoặc `sgd`.
-- `--scheduler`: `plateau` hoặc `cosine`.
-- `--learning-rate`: bước cập nhật trọng số.
-- `--weight-decay`: regularization cho trọng số.
-- `--label-smoothing`: giảm mức quá tự tin của nhãn.
-- `--seed`: cố định phép tách dữ liệu và khởi tạo ngẫu nhiên.
-
-Với GPU 4 GB VRAM, bắt đầu bằng batch size `16` hoặc `32`. Nếu gặp lỗi hết
-VRAM, giảm xuống `8`:
+## 7. Export và kiểm thử
 
 ```powershell
-python train.py --batch-size 8 router
+python export_onnx.py
+python verify_onnx.py --image path\to\image.jpg
+python package_models.py --require-onnx
+python -m unittest -v test_regression.py
 ```
 
-Model tự dừng nếu validation loss không cải thiện trong ba epoch.
-
-## Kết quả của mỗi lần train
-
-Mỗi lần train tạo một thư mục riêng trong `runs/`:
-
-```text
-runs/<timestamp>_<task>_<category>_<model>/
-  config.json       # toàn bộ tham số đầu vào và phiên bản thư viện
-  metrics.csv       # train/valid loss, accuracy, LR và thời gian từng epoch
-  best_model.pth    # checkpoint tốt nhất của riêng run
-  summary.json      # test accuracy, macro F1, precision/recall/F1 từng lớp
-```
-
-Checkpoint tốt nhất đồng thời được copy vào `models/` để pipeline dự đoán sử
-dụng. Chọn mục `Training results` trong menu để so sánh các run đã hoàn thành.
-
-## Tuning tham số
-
-Chọn `Hyperparameter tuning` trong menu hoặc chạy:
-
-```powershell
-python tune.py --task freshness --category cu --epochs 3
-```
-
-Tuning chạy các baseline model/phương pháp khác nhau và tạo leaderboard CSV.
-Ba epoch chỉ dùng sàng lọc nhanh; cấu hình thắng cần được train lại đủ epoch.
-
-Khi bắt đầu train, chương trình dùng seed `42` để tách cố định 20% ảnh trong tập
-train thành test nội bộ. Ảnh test không dùng augmentation và không tham gia cập
-nhật trọng số, chọn checkpoint hoặc early stopping. Sau khi train xong, checkpoint
-tốt nhất được nạp lại và chấm test đúng một lần.
-
-Luồng dữ liệu thực tế:
-
-```text
-data/train -> 80% học + 20% test cuối
-data/valid -> chọn model và early stopping
-```
-
-## 6. Resume an toàn
-
-Mỗi run tạo các file:
-
-```text
-runs/<run>/last_checkpoint.pth  # trạng thái mới nhất, lưu sau mỗi epoch
-runs/<run>/best_model.pth       # model tốt nhất theo validation loss
-```
-
-Resume bằng checkpoint mới nhất; `--epochs` là tổng số epoch mục tiêu:
-
-```powershell
-python train.py --epochs 15 --resume runs/<run>/last_checkpoint.pth router
-```
-
-Checkpoint lưu model, optimizer, scheduler, AMP scaler, epoch, metric tốt nhất và random state. Nếu process bị kill giữa epoch, mất tối đa epoch đang chạy; checkpoint cũ vẫn nguyên vẹn.
-
-## 7. Thứ tự huấn luyện đề xuất
-
-1. Phân loại toàn bộ dữ liệu theo năm nhóm.
-2. Train router.
-3. Train đủ năm freshness expert.
-4. Kiểm tra từng model trên ảnh chưa từng xuất hiện trong train.
-5. Chạy pipeline dự đoán hoàn chỉnh.
-
-## 7. Dự đoán
-
-Sau khi đã có router và expert tương ứng:
-
-```powershell
-python predict.py path\to\image.jpg
-```
-
-Kết quả gồm:
-
-- Nhóm thực phẩm và độ tin cậy.
-- Mức độ tươi và độ tin cậy.
-- Chỉ số độ tươi ước tính từ `1–10`.
-
-Chỉ số này được suy ra từ hình ảnh, không thay thế kiểm nghiệm an toàn thực phẩm.
-
-## 8. Lỗi thường gặp
-
-### `Dữ liệu chưa sẵn sàng`
-
-Một hoặc nhiều thư mục lớp đang rỗng. Bổ sung ảnh vào đủ các thư mục trong
-`data/train` và `data/valid`.
-
-### Train hiển thị `Thiết bị: CPU`
-
-PyTorch hiện tại không có CUDA. Kiểm tra:
-
-```powershell
-python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
-```
-
-### `CUDA out of memory`
-
-Giảm batch size và đóng các ứng dụng đang sử dụng GPU:
-
-```powershell
-python train.py --batch-size 8 router
-```
-
-### Thiếu model khi dự đoán
-
-Pipeline cần `models/router.pth` và expert của nhóm được router nhận diện. Hãy
-train đủ sáu model trước khi chạy dự đoán tổng quát.
+`package_models.py` tạo manifest checksum và copy cả `.onnx.data` khi cần.

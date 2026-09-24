@@ -6,7 +6,7 @@ import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from food_ai.config import MODEL_DIR, ROUTER_MODEL, freshness_model
+from food_ai.config import CATEGORIES, MODEL_DIR, ROUTER_MODEL, freshness_model
 from food_ai.model import create_model
 
 
@@ -25,16 +25,22 @@ def export_checkpoint(source: Path, destination: Path) -> None:
         output_names=["logits"],
         dynamic_axes={"image": {0: "batch"}, "logits": {0: "batch"}},
         opset_version=18,
+        dynamo=False,
     )
     print(f"{destination}: {classes}")
 
 
 def main() -> None:
     export_checkpoint(ROUTER_MODEL, MODEL_DIR / "router.onnx")
-    for category in ("gia_suc", "rau", "cu", "qua"):
+
+    for category in CATEGORIES:
         source = freshness_model(category)
+
         if source.exists():
-            export_checkpoint(source, MODEL_DIR / "freshness" / f"{category}.onnx")
+            export_checkpoint(
+                source,
+                MODEL_DIR / "freshness" / f"{category}.onnx",
+            )
         else:
             print(f"skip missing: {source}")
 

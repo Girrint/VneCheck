@@ -1,140 +1,92 @@
 # VnGrocery AI
 
-Pipeline AI phân loại nhóm thực phẩm và đánh giá độ tươi.
+Hệ thống Python phân loại nhóm thực phẩm và ước lượng độ tươi bằng mô hình CNN pretrained từ `torchvision`, mặc định là MobileNetV3-Large.
 
-## Luồng
+## Mục lục tài liệu
 
-```text
-ảnh → router → nhóm thực phẩm → freshness expert → FRESH / HALF-FRESH / SPOILED
-```
+- [Kiến trúc](ARCHITECTURE.md): router, freshness expert và luồng suy luận.
+- [Thuật toán](ALGORITHM.md): thuật toán hoạt động, tiền xử lý, forward và điểm tươi.
+- [Dữ liệu](DATA.md): cấu trúc dataset, nguồn dữ liệu và kiểm soát leakage.
+- [Huấn luyện](TRAIN.md): cài đặt, train, resume, đánh giá và export.
+- [Nguyên lý thư viện](LIBRARY_PRINCIPLES.md): transfer learning, loss, optimizer và metric.
+- [So sánh model](MODEL_COMPARISON.md): baseline, sơ đồ CNN, đánh giá đơn và đa tầng.
 
-Router hiện có các nhóm:
+## Trạng thái hiện tại
 
-```text
-cu, gia_suc, qua, rau
-```
+- Router phân loại 5 nhóm: `cu`, `gia_cam`, `gia_suc`, `qua`, `rau`.
+- Freshness expert hiện không đồng nhất số lớp:
+  - `gia_cam`, `gia_suc`: `FRESH`, `HALF-FRESH`, `SPOILED`.
+  - `cu`, `qua`, `rau`: `FRESH`, `SPOILED`.
+- Preprocessing chuẩn cho validation/inference: RGB, `Resize(232)`, `CenterCrop(224)`, ImageNet normalization.
+- Dataset hiện có ảnh trùng giữa `train` và `valid`; metric hiện tại chưa phải bằng chứng tổng quát hóa.
+- `evaluate_end_to_end.py` hiện chưa chạy được với expert 2 lớp và 3 lớp trộn lẫn; cần sửa contract trước khi dùng.
 
-`gia_cam` chỉ hoạt động sau khi có `data/train/gia_cam`, `data/valid/gia_cam` và checkpoint expert tương ứng.
+## Cài đặt nhanh
 
-## Cài đặt
-
-PowerShell tại thư mục `vnecheck`:
+PowerShell tại thư mục dự án:
 
 ```powershell
+winget install --id Python.Python.3.12 --scope user --accept-source-agreements --accept-package-agreements
+& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Kiểm tra CUDA:
+Kiểm tra môi trường:
 
 ```powershell
-python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python --version
+python -m pip check
 ```
 
-## Dataset
+## Chạy các công cụ chính
 
-```text
-data/
-  train/
-    cu/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    gia_suc/
-    gia_cam/
-    qua/
-    rau/
-  valid/
-    ... cùng cấu trúc với train ...
-```
-
-Mỗi ảnh chỉ xuất hiện trong một split. Không để ảnh gốc hoặc augmentation của cùng ảnh trong cả `train` và `valid`.
-
-## Train
-
-Train router:
-
-```powershell
-python train.py --epochs 15 --batch-size 8 --workers 0 router
-```
-
-Train freshness expert:
-
-```powershell
-python train.py --epochs 15 --batch-size 8 --workers 0 freshness --category cu
-python train.py --epochs 15 --batch-size 8 --workers 0 freshness --category gia_suc
-python train.py --epochs 15 --batch-size 8 --workers 0 freshness --category qua
-python train.py --epochs 15 --batch-size 8 --workers 0 freshness --category rau
-```
-
-`--epochs` là tổng số epoch mục tiêu. `--workers 0` ổn định hơn trên Windows; tăng lên khi data loading không còn là nút thắt.
-
-## Checkpoint và resume
-
-Mỗi run nằm trong `runs/<run>/`:
-
-```text
-last_checkpoint.pth  # trạng thái mới nhất
-best_model.pth       # model có validation loss tốt nhất
-metrics.csv          # metrics từng epoch
-summary.json         # kết quả test cuối
-config.json          # cấu hình run
-```
-
-`last_checkpoint.pth` được tạo trước epoch đầu và cập nhật sau mỗi epoch. Nó lưu:
-
-- Model weights
-- Optimizer
-- Scheduler
-- AMP scaler
-- Epoch hiện tại
-- Best metrics và early-stopping state
-- Random state CPU/GPU
-
-Resume từ trạng thái mới nhất:
-
-```powershell
-python train.py --epochs 15 --resume runs\20260722_071335_router_resume_epoch1_6\last_checkpoint.pth router
-```
-
-Resume từ `best_model.pth` cũ vẫn chạy được, nhưng checkpoint cũ chỉ có weights nên không khôi phục được optimizer/scheduler chính xác. Checkpoint mới thì khôi phục đầy đủ.
-
-Nếu process bị kill giữa epoch, mất tối đa epoch đang chạy; checkpoint trước đó không bị ghi hỏng.
-
-## Dự đoán
+Dự đoán PyTorch:
 
 ```powershell
 python predict.py path\to\image.jpg
 ```
 
-Pipeline đầy đủ cần router và freshness expert tương ứng trong `models/`.
+Kiểm tra ảnh trùng:
 
-## Export ONNX cho Flutter
+```powershell
+python scripts\check_duplicates.py
+```
 
-Export router và các expert hiện có:
+Đánh giá end-to-end và uncertainty chỉ chạy sau khi contract freshness được thống nhất:
+
+```powershell
+python evaluate_end_to_end.py --root data\valid
+python evaluate_router_uncertainty.py --root data\valid --threshold 0.8
+```
+
+Export và verify ONNX:
 
 ```powershell
 python export_onnx.py
+python verify_onnx.py --image path\to\image.jpg
 ```
 
-Sinh ra:
+Tạo manifest model:
 
-```text
-models/router.onnx
-models/freshness/cu.onnx
-models/freshness/gia_suc.onnx
-models/freshness/qua.onnx
-models/freshness/rau.onnx
+```powershell
+python package_models.py --require-onnx
 ```
 
-Các file ONNX được copy vào:
+Chạy regression tests:
 
-```text
-../VnGrocery/assets/models/
+```powershell
+python -m unittest -v test_regression.py
 ```
 
-Flutter dùng preprocessing giống Python: RGB, resize cạnh ngắn `232`, center crop `224x224`, rồi normalize ImageNet.
+## Rủi ro trước khi phát hành
 
-## Kết quả hiện tại
+1. Tạo lại split theo group/source/product; không chia ngẫu nhiên các ảnh cùng nguồn sang nhiều split.
+2. Xử lý toàn bộ duplicate và near-duplicate, sau đó train lại.
+3. Chốt freshness contract 2 lớp hoặc 3 lớp; checkpoint, evaluator, client và tài liệu phải cùng contract.
+4. Sửa evaluator end-to-end để hỗ trợ contract đã chốt.
+5. Chỉ chọn model MobileNetV3 sau khi đánh giá trên split sạch và test độc lập.
+6. Tạo manifest và kiểm tra checksum trước khi copy sang Flutter.
 
-Router tốt nhất đã đạt khoảng `99.70%` test accuracy. Kết quả không thay thế kiểm nghiệm an toàn thực phẩm.
+Kết quả model chỉ là ước lượng từ hình ảnh, không thay thế kiểm nghiệm an toàn thực phẩm.

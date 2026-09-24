@@ -1,6 +1,6 @@
 from pathlib import Path
 
-CATEGORIES = ("gia_suc", "gia_cam", "rau", "cu", "qua")
+CATEGORIES = ("cu", "gia_cam", "gia_suc", "qua", "rau")
 CATEGORY_LABELS = {
     "gia_suc": "Gia súc",
     "gia_cam": "Gia cầm",

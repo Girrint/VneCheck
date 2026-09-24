@@ -60,7 +60,11 @@ def trainable_parameters(model):
 
 
 def load_checkpoint(path, device):
-    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(path, map_location=device)
+
     classes = checkpoint["classes"]
     model_name = checkpoint.get("model_name", "mobilenet_v3_large")
     model = create_model(len(classes), model_name=model_name)
