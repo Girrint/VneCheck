@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import torch
@@ -9,6 +10,10 @@ from torchvision.datasets import ImageFolder
 from food_ai.config import DATA_DIR, ROUTER_MODEL
 from food_ai.data import build_transforms
 from food_ai.model import load_checkpoint
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -70,7 +75,7 @@ def evaluate(model, loader, threshold):
 
 def main():
     parser = argparse.ArgumentParser(description="Đánh giá confidence và entropy của router")
-    parser.add_argument("--root", type=Path, default=DATA_DIR / "valid")
+    parser.add_argument("--root", type=Path, default=DATA_DIR / "test")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--threshold", type=float, default=0.8)
     args = parser.parse_args()
@@ -81,7 +86,7 @@ def main():
     model, classes = load_checkpoint(ROUTER_MODEL, DEVICE)
     dataset = ImageFolder(args.root, transform=eval_transform)
     if dataset.classes != classes:
-        raise ValueError(f"Nhãn valid/router không khớp: {dataset.classes} != {classes}")
+        raise ValueError(f"Nhãn dataset/router không khớp: {dataset.classes} != {classes}")
 
     result = evaluate(model, DataLoader(dataset, batch_size=args.batch_size, shuffle=False), args.threshold)
     result.update({"root": str(args.root), "device": str(DEVICE), "classes": classes})

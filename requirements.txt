@@ -1,8 +1,8 @@
 ﻿torch
 torchvision
 Pillow
-opencv-python
 numpy
 onnx
 onnxscript
-icrawler
+onnxruntime
+ImageHash

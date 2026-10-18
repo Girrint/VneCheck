@@ -19,7 +19,7 @@ from food_ai.config import (
     MODEL_DIR,
     freshness_model,
 )
-from food_ai.data import create_loaders
+from food_ai.data import create_loaders, preprocessing_metadata
 from food_ai.experiment import (
     ExperimentTracker,
     classification_report,
@@ -80,10 +80,16 @@ def parse_args():
 
 def resolve_task(args):
     if args.task == "router":
-        return DATA_DIR / "train", DATA_DIR / "valid", MODEL_DIR / "router.pth"
+        return (
+            DATA_DIR / "train",
+            DATA_DIR / "valid",
+            DATA_DIR / "test",
+            MODEL_DIR / "router.pth",
+        )
     return (
         DATA_DIR / "train" / args.category,
         DATA_DIR / "valid" / args.category,
+        DATA_DIR / "test" / args.category,
         freshness_model(args.category),
     )
 
@@ -171,14 +177,14 @@ def main():
         torch.backends.cudnn.benchmark = True
         torch.set_float32_matmul_precision("high")
 
-    train_root, valid_root, output_path = resolve_task(args)
+    train_root, valid_root, test_root, output_path = resolve_task(args)
     try:
         train_loader, valid_loader, test_loader, classes = create_loaders(
             train_root,
             valid_root,
+            test_root,
             args.batch_size,
             args.workers,
-            seed=args.seed,
         )
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"Dữ liệu chưa sẵn sàng: {error}") from error
@@ -205,9 +211,13 @@ def main():
     config = {
         **vars(args),
         "classes": classes,
+        "train_root": str(train_root),
+        "valid_root": str(valid_root),
+        "test_root": str(test_root),
         "train_images": len(train_loader.dataset),
         "valid_images": len(valid_loader.dataset),
         "test_images": len(test_loader.dataset),
+        "preprocessing": preprocessing_metadata(),
         "device": device_name,
         "python": sys.version,
         "pytorch": torch.__version__,

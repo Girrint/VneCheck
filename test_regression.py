@@ -1,10 +1,10 @@
 import json
-import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from food_ai.config import CATEGORIES, FRESHNESS_CLASSES
-from scripts.check_duplicates import find_cross_split_duplicates
+from scripts.resplit_dataset import prepare_unique_records, split_clusters
 
 
 class ContractTests(unittest.TestCase):
@@ -15,33 +15,60 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(FRESHNESS_CLASSES, ("FRESH", "HALF-FRESH", "SPOILED"))
 
 
-class DuplicateDetectionTests(unittest.TestCase):
-    def test_detects_identical_bytes_across_splits(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            train = root / "train"
-            valid = root / "valid"
-            train.mkdir()
-            valid.mkdir()
-            (train / "one.jpg").write_bytes(b"same image")
-            (valid / "renamed.png").write_bytes(b"same image")
+class DatasetSplitTests(unittest.TestCase):
+    @staticmethod
+    def record(path, class_name, sha256, phash=0):
+        return {
+            "path": path,
+            "class": class_name,
+            "sha256": sha256,
+            "phash": phash,
+        }
 
-            duplicates = find_cross_split_duplicates({"train": train, "valid": valid})
+    def test_exact_duplicate_same_label_keeps_one_representative(self):
+        records = [
+            self.record("b.jpg", "qua/FRESH/apple", "same"),
+            self.record("a.jpg", "qua/FRESH/apple", "same"),
+        ]
 
-            self.assertEqual(len(duplicates), 1)
-            self.assertEqual({split for split, _ in duplicates[0][1]}, {"train", "valid"})
+        kept, excluded = prepare_unique_records(records)
 
-    def test_does_not_report_unique_bytes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            train = root / "train"
-            valid = root / "valid"
-            train.mkdir()
-            valid.mkdir()
-            (train / "one.jpg").write_bytes(b"train image")
-            (valid / "one.jpg").write_bytes(b"valid image")
+        self.assertEqual([record["path"] for record in kept], ["a.jpg"])
+        self.assertEqual(excluded[0]["status"], "exact_duplicate")
+        self.assertEqual(excluded[0]["kept_path"], "a.jpg")
 
-            self.assertEqual(find_cross_split_duplicates({"train": train, "valid": valid}), [])
+    def test_exact_duplicate_with_conflicting_labels_is_quarantined(self):
+        records = [
+            self.record("fresh.jpg", "qua/FRESH/orange", "same"),
+            self.record("spoiled.jpg", "qua/SPOILED/orange", "same"),
+        ]
+
+        kept, excluded = prepare_unique_records(records)
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(excluded), 2)
+        self.assertTrue(all(row["status"] == "label_conflict" for row in excluded))
+
+    def test_cluster_is_never_split_between_partitions(self):
+        cluster = [
+            self.record("one.jpg", "cu/FRESH/carrot", "one"),
+            self.record("two.jpg", "cu/FRESH/carrot", "two"),
+        ]
+        singles = [
+            [self.record(f"single-{index}.jpg", "cu/FRESH/carrot", str(index))]
+            for index in range(20)
+        ]
+
+        plan, _, _ = split_clusters(
+            [cluster, *singles], (0.7, 0.15, 0.15), seed=42
+        )
+
+        destinations = {
+            split
+            for split, records in plan.items()
+            if any(record["path"] in {"one.jpg", "two.jpg"} for record in records)
+        }
+        self.assertEqual(len(destinations), 1)
 
 
 class PreprocessingTests(unittest.TestCase):
@@ -60,6 +87,41 @@ class PreprocessingTests(unittest.TestCase):
         self.assertEqual(tuple(tensor.shape), (3, 224, 224))
         self.assertEqual(tensor.dtype, __import__("torch").float32)
         self.assertEqual(tensor.numpy().dtype, np.float32)
+
+    def test_loaders_read_three_independent_splits(self):
+        try:
+            import torch
+            from food_ai.data import create_loaders
+        except ImportError as error:
+            self.skipTest(f"optional ML dependency unavailable: {error}")
+
+        roots_seen = []
+
+        class FakeDataset:
+            classes = ["FRESH"]
+
+            def __init__(self, root, transform=None):
+                roots_seen.append(Path(root))
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, index):
+                return torch.zeros(3, 224, 224), 0
+
+        with patch("food_ai.data.NonEmptyImageFolder", FakeDataset):
+            train, valid, test, classes = create_loaders(
+                "train-root", "valid-root", "test-root", 1, 0
+            )
+
+        self.assertEqual(
+            roots_seen,
+            [Path("train-root"), Path("valid-root"), Path("test-root")],
+        )
+        self.assertEqual(classes, ["FRESH"])
+        self.assertEqual(len(train.dataset), 1)
+        self.assertEqual(len(valid.dataset), 1)
+        self.assertEqual(len(test.dataset), 1)
 
 
 class ManifestTests(unittest.TestCase):

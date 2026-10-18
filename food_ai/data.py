@@ -3,10 +3,18 @@ import warnings
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader, Subset
+from PIL import ImageOps
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torchvision.datasets.folder import IMG_EXTENSIONS
+
+from food_ai.config import (
+    EVAL_RESIZE_SIZE,
+    IMAGE_SIZE,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+)
 
 warnings.filterwarnings(
     "ignore",
@@ -36,21 +44,54 @@ class NonEmptyImageFolder(ImageFolder):
         return classes, {name: index for index, name in enumerate(classes)}
 
 
+class PrepareImage:
+    """Áp dụng EXIF orientation và bảo đảm ảnh có ba kênh RGB."""
+
+    def __call__(self, image):
+        return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def preprocessing_metadata():
+    return {
+        "color": "RGB",
+        "exif_orientation": True,
+        "resize": EVAL_RESIZE_SIZE,
+        "crop": "center",
+        "crop_size": IMAGE_SIZE,
+        "normalize": {
+            "mean": list(IMAGENET_MEAN),
+            "std": list(IMAGENET_STD),
+        },
+    }
+
+
 def build_transforms():
     normalize = transforms.Normalize(
-        mean=(0.485, 0.456, 0.406),
-        std=(0.229, 0.224, 0.225),
+        mean=IMAGENET_MEAN,
+        std=IMAGENET_STD,
     )
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        PrepareImage(),
+        transforms.RandomResizedCrop(
+            IMAGE_SIZE,
+            scale=(0.85, 1.0),
+            ratio=(0.85, 1.15),
+            antialias=True,
+        ),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(12),
+        transforms.ColorJitter(
+            brightness=0.10,
+            contrast=0.10,
+            saturation=0.05,
+            hue=0.0,
+        ),
         transforms.ToTensor(),
         normalize,
     ])
     eval_transform = transforms.Compose([
-        transforms.Resize(232),
-        transforms.CenterCrop(224),
+        PrepareImage(),
+        transforms.Resize(EVAL_RESIZE_SIZE, antialias=True),
+        transforms.CenterCrop(IMAGE_SIZE),
         transforms.ToTensor(),
         normalize,
     ])
@@ -60,34 +101,25 @@ def build_transforms():
 def create_loaders(
     train_root,
     valid_root,
+    test_root,
     batch_size,
     workers,
-    test_ratio=0.20,
-    seed=42,
 ):
     train_transform, eval_transform = build_transforms()
-    full_train_dataset = NonEmptyImageFolder(train_root, transform=train_transform)
-    full_test_dataset = NonEmptyImageFolder(train_root, transform=eval_transform)
+    train_dataset = NonEmptyImageFolder(train_root, transform=train_transform)
     valid_dataset = NonEmptyImageFolder(valid_root, transform=eval_transform)
+    test_dataset = NonEmptyImageFolder(test_root, transform=eval_transform)
 
-    if full_train_dataset.classes != valid_dataset.classes:
+    if train_dataset.classes != valid_dataset.classes:
         raise ValueError(
             "Nhãn train/valid không khớp: "
-            f"{full_train_dataset.classes} != {valid_dataset.classes}"
+            f"{train_dataset.classes} != {valid_dataset.classes}"
         )
-
-    total = len(full_train_dataset)
-    if total < 2:
-        raise ValueError("Cần ít nhất hai ảnh để tách train/test")
-    test_count = max(1, round(total * test_ratio))
-    test_count = min(test_count, total - 1)
-    indices = torch.randperm(
-        total, generator=torch.Generator().manual_seed(seed)
-    ).tolist()
-    test_indices = indices[:test_count]
-    train_indices = indices[test_count:]
-    train_dataset = Subset(full_train_dataset, train_indices)
-    test_dataset = Subset(full_test_dataset, test_indices)
+    if train_dataset.classes != test_dataset.classes:
+        raise ValueError(
+            "Nhãn train/test không khớp: "
+            f"{train_dataset.classes} != {test_dataset.classes}"
+        )
 
     use_cuda = torch.cuda.is_available()
     options = {
@@ -103,4 +135,4 @@ def create_loaders(
     )
     valid_loader = DataLoader(valid_dataset, shuffle=False, **options)
     test_loader = DataLoader(test_dataset, shuffle=False, **options)
-    return train_loader, valid_loader, test_loader, full_train_dataset.classes
+    return train_loader, valid_loader, test_loader, train_dataset.classes

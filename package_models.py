@@ -7,18 +7,14 @@ from pathlib import Path
 
 import torch
 
-from food_ai.config import CATEGORIES, MODEL_DIR, ROUTER_MODEL, freshness_model
-
-PREPROCESSING = {
-    "color": "RGB",
-    "resize": 232,
-    "crop": "center",
-    "crop_size": 224,
-    "normalize": {
-        "mean": [0.485, 0.456, 0.406],
-        "std": [0.229, 0.224, 0.225],
-    },
-}
+from food_ai.config import (
+    CATEGORIES,
+    IMAGE_SIZE,
+    MODEL_DIR,
+    ROUTER_MODEL,
+    freshness_model,
+)
+from food_ai.data import preprocessing_metadata
 
 
 def sha256(path: Path) -> str:
@@ -91,8 +87,11 @@ def main():
     manifest = {
         "manifest_version": 1,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "input": {"shape": [1, 3, 224, 224], "dtype": "float32"},
-        "preprocessing": PREPROCESSING,
+        "input": {
+            "shape": [1, 3, IMAGE_SIZE, IMAGE_SIZE],
+            "dtype": "float32",
+        },
+        "preprocessing": preprocessing_metadata(),
         "models": [],
     }
     add_artifact(manifest, "router", "router", ROUTER_MODEL, MODEL_DIR / "router.onnx")

@@ -27,8 +27,8 @@ DEVICE = "cpu"
 def preprocess(image_path: Path) -> torch.Tensor:
     _, transform = build_transforms()
 
-    image = Image.open(image_path).convert("RGB")
-    tensor = transform(image).unsqueeze(0)
+    with Image.open(image_path) as image:
+        tensor = transform(image).unsqueeze(0)
 
     return tensor
 

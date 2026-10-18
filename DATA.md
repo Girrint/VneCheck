@@ -1,81 +1,72 @@
-# Dữ liệu và kiểm soát leakage
+# Dữ liệu
 
-## 1. Cấu trúc
+## Dataset nguồn và dataset huấn luyện
+
+`data/` là dữ liệu nguồn cũ. Pipeline train không đọc trực tiếp thư mục này.
+
+`data_split/` là dataset sạch đang được dùng:
 
 ```text
-data/
-  train/
-    cu/
-      FRESH/
-      SPOILED/
-    gia_cam/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    gia_suc/
-      FRESH/
-      HALF-FRESH/
-      SPOILED/
-    qua/
-      FRESH/
-      SPOILED/
-    rau/
-      FRESH/
-      SPOILED/
-  valid/
-    ... cùng category/freshness thực tế với train ...
+data_split/
+  train/<category>/<freshness>/<product>/...
+  valid/<category>/<freshness>/<product>/...
+  test/<category>/<freshness>/<product>/...
 ```
 
-`ImageFolder` suy ra label từ tên thư mục và bỏ qua class directory không có ảnh. Vì vậy không phải expert nào cũng có đủ ba output.
+Ở tầng router, `category` là class. Ở tầng expert, `freshness` là class;
+`product` chỉ là thư mục tổ chức và không trở thành output của model.
 
-## 2. Số lượng hiện tại
+## Thống kê hiện tại
 
-Theo lần kiểm tra gần nhất:
+| Split | Số ảnh | Tỷ lệ thực tế |
+|---|---:|---:|
+| Train | 66.115 | 69,999% |
+| Validation | 14.172 | 15,005% |
+| Test | 14.162 | 14,995% |
+| Tổng | 94.449 | 100% |
 
-| Category | Freshness có ảnh |
-|---|---|
-| `cu` | `FRESH`, `SPOILED` |
-| `gia_cam` | `FRESH`, `HALF-FRESH`, `SPOILED` |
-| `gia_suc` | `FRESH`, `HALF-FRESH`, `SPOILED` |
-| `qua` | `FRESH`, `SPOILED` |
-| `rau` | `FRESH`, `SPOILED` |
+Số ảnh theo router category:
 
-Số lượng train/valid và trạng thái lớp cần được kiểm tra lại trước mỗi lần train; không suy ra từ thư mục mẫu trong tài liệu.
+| Category | Train | Valid | Test | Freshness |
+|---|---:|---:|---:|---|
+| `cu` | 9.472 | 2.030 | 2.029 | FRESH, SPOILED |
+| `gia_cam` | 6.368 | 1.365 | 1.363 | FRESH, HALF-FRESH, SPOILED |
+| `gia_suc` | 18.792 | 4.027 | 4.027 | FRESH, HALF-FRESH, SPOILED |
+| `qua` | 17.646 | 3.784 | 3.780 | FRESH, SPOILED |
+| `rau` | 13.837 | 2.966 | 2.963 | FRESH, SPOILED |
 
-## 3. Nguồn dữ liệu tham khảo
+## Cách split hiện tại được tạo
 
-- https://www.kaggle.com/datasets/vinayakshanawad/meat-freshness-image-dataset
-- https://www.kaggle.com/datasets/namhoangtrinh/fresh-spoiled-meat
-- https://www.kaggle.com/datasets/crowww/meat-quality-assessment-based-on-deep-learning
-- https://www.kaggle.com/datasets/iwayanadisaputra26/beefyteamdataset
-- https://universe.roboflow.com/reinsgundar/meat-freshness-xpmq5
-
-Cần lưu nguồn, điều kiện chụp, product/object group và phép biến đổi của từng tập khi xây split sạch.
-
-## 4. Vấn đề leakage đã xác nhận
-
-SHA-256 đã phát hiện nhiều nhóm ảnh byte-identical xuất hiện đồng thời trong `data/train` và `data/valid`. Một số ảnh đổi tên hoặc nằm ở thư mục khác nhưng nội dung giống nhau. Ngoài ra, split theo file/product hiện tại không đảm bảo ảnh cùng nguồn hoặc cùng object chỉ xuất hiện trong một split.
-
-Do đó:
-
-- Không dùng metric hiện tại để tuyên bố model chống học vẹt.
-- Không di chuyển/xóa ảnh tự động nếu chưa xác định bản gốc và nhãn đúng.
-- Cần kiểm tra cả near-duplicate bằng perceptual hash hoặc embedding.
-
-Công cụ kiểm tra byte-identical:
+Lần tạo gần nhất dùng:
 
 ```powershell
-python scripts\check_duplicates.py
+python scripts\resplit_dataset.py --threshold 0 --dry-run
+python scripts\resplit_dataset.py --threshold 0
 ```
 
-## 5. Quy trình tạo split sạch
+Đầu vào gồm `data/train` và `data/valid`, tổng cộng 116.818 ảnh. Script:
 
-1. Lập metadata cho mỗi ảnh: source, product/object, session và label.
-2. Gom ảnh cùng nguồn/object/augmentation vào một group.
-3. Chia group, không chia từng file, vào train/validation/test độc lập.
-4. Chạy SHA-256 trên mọi split.
-5. Chạy perceptual hash hoặc embedding similarity để bắt near-duplicate.
-6. Kiểm tra lại phân bố class và recall lớp `SPOILED`.
-7. Chỉ sau đó mới train và đánh giá model.
+1. Tính pHash và SHA-256, có cache trong `reports/`.
+2. Loại 673 file thuộc các SHA-256 xung đột nhãn.
+3. Loại 21.696 exact duplicate dư thừa cùng nhãn.
+4. Giữ lại 94.449 ảnh.
+5. Gom pHash trong cùng leaf class.
+6. Chia nguyên cluster theo tỷ lệ mục tiêu 70/15/15.
+7. Ép cluster quá lớn vào train để không làm validation/test lệch mạnh.
 
-`split_validation.py` hiện chia trong product folder; nó không chứng minh group leakage đã được loại bỏ.
+Kết quả cuối có 79.973 cluster, không có cluster nhiều class và không còn
+cluster trên 500 ảnh trong validation/test.
+
+`threshold=0` chỉ nối ảnh có pHash giống hệt. Nó giảm leakage do ảnh giống nhau
+nhưng không thay thế metadata source/object/session. Nếu bổ sung được metadata,
+nên group theo đối tượng hoặc phiên chụp trước khi chia.
+
+## Báo cáo audit
+
+- `reports/resplit_excluded_files.csv`: file bị loại và lý do.
+- `reports/resplit_cluster_summary.csv`: thống kê từng cluster.
+- `reports/resplit_cluster_members.csv`: thành viên cluster cần kiểm tra.
+- `reports/resplit_phash_cache.pkl`: cache pHash và SHA-256.
+
+Script không xóa hay di chuyển dữ liệu nguồn. Khi output đã tồn tại và không
+rỗng, script từ chối ghi đè; hãy dùng một output mới hoặc lưu trữ split cũ trước.

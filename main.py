@@ -5,10 +5,9 @@ from pathlib import Path
 
 import torch
 
-from food_ai.config import CATEGORIES, CATEGORY_LABELS, DATA_DIR
+from food_ai.config import CATEGORIES, CATEGORY_LABELS, DATA_DIR, FRESHNESS_CLASSES
 from food_ai.model import MODEL_NAMES, TRAINING_METHODS
 
-FRESHNESS_CLASSES = ("FRESH", "HALF-FRESH", "SPOILED")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 
@@ -153,10 +152,11 @@ def dataset_status() -> None:
         for freshness in FRESHNESS_CLASSES:
             train_count = image_count(DATA_DIR / "train" / category / freshness)
             valid_count = image_count(DATA_DIR / "valid" / category / freshness)
-            state = "OK" if train_count and valid_count else "MISSING"
+            test_count = image_count(DATA_DIR / "test" / category / freshness)
+            state = "OK" if train_count and valid_count and test_count else "MISSING"
             print(
                 f"  {freshness:<11} train={train_count:<7} "
-                f"valid={valid_count:<7} {state}"
+                f"valid={valid_count:<7} test={test_count:<7} {state}"
             )
 
 
@@ -210,11 +210,11 @@ HELP
 1. Train category router
    Trains a five-class model that routes an image to livestock, poultry,
    vegetables, tubers, or fruits. Every category needs images in both
-   data/train and data/valid.
+   data_split/train, data_split/valid, and data_split/test.
 
 2. Train freshness expert
-   Trains one category-specific model with FRESH, HALF-FRESH, and SPOILED
-   outputs. Select the food category when prompted.
+   Trains one category-specific model. Its outputs are inferred from the
+   freshness directories that actually exist for that category.
 
 3. Predict an image
    Runs the router first, then the matching freshness expert. All required
@@ -222,7 +222,7 @@ HELP
 
 4. Dataset status
    Counts supported image files for every category, freshness class, and
-   split. MISSING means that training data or validation data is absent.
+   split. MISSING means that train, validation, or test data is absent.
 
 5. Hyperparameter tuning
    Runs a short, controlled grid of model architectures, transfer-learning

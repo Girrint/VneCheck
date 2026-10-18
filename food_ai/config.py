@@ -21,7 +21,12 @@ FRESHNESS_ANCHORS = {
     "SPOILED": 1.0,
 }
 
-DATA_DIR = Path("data")
+IMAGE_SIZE = 224
+EVAL_RESIZE_SIZE = 232
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+DATA_DIR = Path("data_split")
 MODEL_DIR = Path("models")
 ROUTER_MODEL = MODEL_DIR / "router.pth"
 

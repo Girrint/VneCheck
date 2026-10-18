@@ -6,7 +6,13 @@ import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from food_ai.config import CATEGORIES, MODEL_DIR, ROUTER_MODEL, freshness_model
+from food_ai.config import (
+    CATEGORIES,
+    IMAGE_SIZE,
+    MODEL_DIR,
+    ROUTER_MODEL,
+    freshness_model,
+)
 from food_ai.model import create_model
 
 
@@ -19,7 +25,7 @@ def export_checkpoint(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
         model,
-        torch.randn(1, 3, 224, 224),
+        torch.randn(1, 3, IMAGE_SIZE, IMAGE_SIZE),
         destination,
         input_names=["image"],
         output_names=["logits"],

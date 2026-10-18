@@ -34,8 +34,8 @@ def predict(image_path):
         raise FileNotFoundError(f"Thiếu model router: {ROUTER_MODEL}")
 
     _, eval_transform = build_transforms()
-    image = Image.open(image_path).convert("RGB")
-    tensor = eval_transform(image).unsqueeze(0).to(DEVICE)
+    with Image.open(image_path) as image:
+        tensor = eval_transform(image).unsqueeze(0).to(DEVICE)
 
     router, category_classes = load_checkpoint(ROUTER_MODEL, DEVICE)
     category_probs = predict_probabilities(router, category_classes, tensor)

@@ -1,145 +1,113 @@
-# Hướng dẫn huấn luyện
+# Huấn luyện và đánh giá
 
-## Menu tương tác
+## Contract dữ liệu
 
-Khởi động menu chính:
+`train.py` đọc ba thư mục độc lập:
 
-```powershell
-python main.py
-```
+- `data_split/train`: cập nhật trọng số.
+- `data_split/valid`: scheduler, chọn checkpoint và early stopping.
+- `data_split/test`: chấm đúng một lần sau khi nạp checkpoint tốt nhất.
 
-Menu hỗ trợ train router, train từng freshness expert, dự đoán ảnh, kiểm tra
-dataset và có trang trợ giúp bằng tiếng Anh.
+Class list của ba split phải giống nhau. Loader sẽ dừng nếu contract này sai.
 
-## 1. Kích hoạt môi trường
+Tiền xử lý được thực hiện online khi DataLoader đọc batch; script không tạo bản
+resize và không thay đổi ảnh gốc. Train dùng crop ngẫu nhiên nhẹ, lật ngang và
+jitter ánh sáng nhỏ. Validation, test, `predict.py` và ONNX verification dùng
+chung pipeline EXIF → RGB → Resize(232) → CenterCrop(224) → ImageNet normalize.
 
-Chạy trong PowerShell tại thư mục dự án:
-
-```powershell
-if (-not (Test-Path .\.venv\Scripts\python.exe)) {
-    & "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv
-}
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m pip check
-```
-
-Kiểm tra CUDA:
-
-```powershell
-python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
-```
-
-Nếu `py` không tồn tại, dùng đường dẫn Python trực tiếp như lệnh tạo venv ở trên.
-
-## 2. Trước khi train
-
-Chạy kiểm tra duplicate:
-
-```powershell
-python scripts\check_duplicates.py
-```
-
-Nếu công cụ trả exit code `1`, phải xử lý leakage hoặc ghi nhận rõ đây chỉ là train thử nghiệm. Dataset hiện tại đã có cross-split duplicate.
-
-Chốt contract freshness trước khi train lại. Hiện `gia_cam` và `gia_suc` có 3 lớp; `cu`, `qua`, `rau` có 2 lớp.
-
-## 3. Huấn luyện
+## Lệnh train
 
 Router:
 
 ```powershell
-python train.py --epochs 15 --batch-size 16 --workers 0 router
+python train.py router
 ```
 
-Expert:
+Freshness experts:
 
 ```powershell
-python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category gia_suc
-python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category gia_cam
-python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category rau
-python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category cu
-python train.py --epochs 15 --batch-size 16 --workers 0 freshness --category qua
+python train.py freshness --category cu
+python train.py freshness --category gia_cam
+python train.py freshness --category gia_suc
+python train.py freshness --category qua
+python train.py freshness --category rau
 ```
 
-Default thực tế trong `train.py`: epochs `15`, batch size `16`, workers là `min(4, os.cpu_count())`, model `mobilenet_v3_large`, method `fine_tune`, optimizer `adamw`, scheduler `plateau`, learning rate `5e-4`, weight decay `1e-4`, label smoothing `0.05`, seed `42`.
-
-Các lựa chọn model/method:
+Ví dụ cấu hình rõ ràng:
 
 ```powershell
-python train.py --model mobilenet_v3_small --method head_only router
-python train.py --model mobilenet_v3_large --method fine_tune router
+python train.py --epochs 15 --batch-size 16 --workers 4 `
+  --model mobilenet_v3_large --method fine_tune `
+  --optimizer adamw --scheduler plateau `
+  --learning-rate 5e-4 --weight-decay 1e-4 `
+  router
 ```
 
-## 4. Split và metric
+Mặc định: 15 epoch, batch 16, MobileNetV3-Large, fine-tune, AdamW, Plateau,
+learning rate `5e-4`, weight decay `1e-4`, label smoothing `0.05`, seed `42`.
+Early stopping xảy ra sau 3 epoch không cải thiện validation loss.
 
-`food_ai.data.create_loaders()` hiện tách ngẫu nhiên 20% từ `data/train` thành test nội bộ bằng seed `42`; `data/valid` được dùng để chọn checkpoint và early stopping. Đây là split theo file, không phải group split, nên không đủ chống leakage.
+## Output
 
-Train dùng augmentation:
+Mỗi run tạo:
 
 ```text
-RandomResizedCrop(224, scale=0.8..1.0)
-RandomHorizontalFlip
-RandomRotation(12)
-ToTensor + ImageNet normalization
+runs/<timestamp>_<name>/
+  config.json
+  metrics.csv
+  best_model.pth
+  last_checkpoint.pth
+  summary.json
 ```
 
-Validation/test dùng `Resize(232) + CenterCrop(224) + ToTensor + ImageNet normalization`.
-
-Checkpoint tốt nhất chọn theo validation loss. Báo cáo gồm accuracy, macro-F1, precision/recall/F1 từng lớp và confusion matrix.
-
-## 5. Resume và output
-
-Mỗi run nằm trong `runs/<run>/`:
+Checkpoint tốt nhất đồng thời được copy vào:
 
 ```text
-config.json
-metrics.csv
-best_model.pth
-last_checkpoint.pth
-summary.json
+models/router.pth
+models/freshness/<category>.pth
 ```
 
-Resume:
+`summary.json` chứa validation tốt nhất, test loss, test accuracy, macro-F1,
+metric từng lớp và confusion matrix.
+
+## Resume
 
 ```powershell
-python train.py --epochs 15 --resume runs\<run>\last_checkpoint.pth router
+python train.py --epochs 30 `
+  --resume runs\<run>\last_checkpoint.pth router
 ```
 
-`--epochs` là tổng số epoch mục tiêu. Chỉ resume checkpoint cùng task, category, model, class order và training method; code hiện tại chưa tự kiểm tra đầy đủ các metadata này.
+`--epochs` là tổng epoch mục tiêu, không phải số epoch chạy thêm. Chỉ resume
+checkpoint cùng task, category, kiến trúc, method và class order.
 
-## 6. Đánh giá
+## Đánh giá
 
-Router uncertainty:
+Router confidence và entropy trên `data_split/test`:
 
 ```powershell
-python evaluate_router_uncertainty.py --root data\valid --threshold 0.8
+python evaluate_router_uncertainty.py --threshold 0.8
 ```
 
-End-to-end:
+Toàn pipeline router → expert:
 
 ```powershell
-python evaluate_end_to_end.py --root data\valid
+python evaluate_end_to_end.py
 ```
 
-Evaluator end-to-end hiện chưa hỗ trợ dataset có expert 2 lớp và 3 lớp đồng thời; cần sửa contract/evaluator trước khi dùng.
+Evaluator end-to-end hỗ trợ expert 2 lớp và 3 lớp bằng cách quy đổi tên lớp về
+contract chung `FRESH`, `HALF-FRESH`, `SPOILED`.
 
-Benchmark MobileNetV3:
+## Tuning
 
 ```powershell
-python benchmark_mobilenet.py router --epochs 15 --batch-size 16 --workers 0
-python benchmark_mobilenet.py freshness --category cu --epochs 15 --batch-size 16 --workers 0
+python tune.py --task router --epochs 3
+python tune.py --task freshness --category gia_suc --epochs 3
+python benchmark_mobilenet.py router --epochs 15
 ```
 
-Không chọn model dựa trên accuracy của split đang leakage.
+Chọn cấu hình bằng validation loss/F1, không chọn bằng test. Các script tự động
+vẫn ghi test của từng trial vì gọi `train.py`; không dùng các test score đó để
+tuning hoặc liên tục điều chỉnh model.
 
-## 7. Export và kiểm thử
-
-```powershell
-python export_onnx.py
-python verify_onnx.py --image path\to\image.jpg
-python package_models.py --require-onnx
-python -m unittest -v test_regression.py
-```
-
-`package_models.py` tạo manifest checksum và copy cả `.onnx.data` khi cần.
+Các checkpoint hiện có được train trước khi tạo `data_split`; hãy train lại đủ
+router và 5 expert trước khi công bố kết quả trên test sạch.

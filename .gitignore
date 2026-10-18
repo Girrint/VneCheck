@@ -15,10 +15,15 @@ htmlcov/
 
 # Training data and generated artifacts
 data/
+data_split/
 Dataset/
 models/
 gradcam_history/
 runs/
+reports/resplit_phash_cache.pkl
+reports/resplit_cluster_summary.csv
+reports/resplit_cluster_members.csv
+reports/resplit_excluded_files.csv
 *.pth
 *.pt
 *.onnx
