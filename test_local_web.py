@@ -1,10 +1,12 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
 
 from food_ai.data import build_transforms
+from food_ai.config import ROUTER_CLASSES
 from local_web.server import (
     LocalEvaluationApp,
     LegacyOnnxRuntimeModel,
@@ -65,6 +67,29 @@ class LocalWebTests(unittest.TestCase):
         self.assertEqual(
             set(result["freshness_probabilities"]), {"FRESH", "SPOILED"}
         )
+
+    def test_legacy_router_rejects_negative_without_running_expert(self):
+        model = LegacyOnnxRuntimeModel.__new__(LegacyOnnxRuntimeModel)
+        model.error = None
+        model.root = Path("legacy")
+        model.router_path = model.root / "router.onnx"
+        model.category_classes = list(ROUTER_CLASSES)
+        model.sessions = {}
+        model._session = lambda key, path: key
+        logits = np.zeros((1, len(ROUTER_CLASSES)), dtype=np.float32)
+        logits[0, ROUTER_CLASSES.index("NON_FOOD")] = 10.0
+        model._run = lambda session, inputs: logits
+
+        with patch(
+            "local_web.server.preprocess_image",
+            return_value=np.zeros((3, 224, 224), dtype=np.float32),
+        ):
+            result = model.predict_batch([Path("negative.jpg")], [""])[0]
+
+        self.assertEqual(result["food_status"], "NON_FOOD")
+        self.assertAlmostEqual(result["food_probabilities"]["NON_FOOD"], 0.9997, places=4)
+        self.assertIsNone(result["pipeline"])
+        self.assertIsNone(result["oracle"])
 
     def test_csv_report_contract_contains_detailed_predictions(self):
         self.assertEqual(len(REPORT_FIELDS), len(set(REPORT_FIELDS)))

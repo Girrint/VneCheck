@@ -2,7 +2,8 @@
 
 Hệ thống có hai pipeline chạy song song:
 
-1. **Legacy:** router nhận diện 5 nhóm rồi chọn một trong 5 freshness expert.
+1. **Legacy:** router 7 lớp nhận diện 5 nhóm hoặc từ chối
+   `UNSUPPORTED`/`NON_FOOD`; chỉ ảnh thuộc 5 nhóm mới chạy freshness expert.
 2. **Unified:** một backbone với ba head food/category/freshness, có thể từ
    chối `UNSUPPORTED` và `NON_FOOD`.
 

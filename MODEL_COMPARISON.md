@@ -20,7 +20,7 @@ Phương pháp:
 
 ## Quy trình hợp lệ
 
-1. Chốt `data_split` và không thay đổi nó giữa các trial.
+1. Chốt `data_split` và `data_negative`, không thay đổi giữa các trial.
 2. Train các trial với cùng seed và budget.
 3. Xếp hạng bằng validation loss và macro-F1.
 4. Kiểm tra recall từng lớp, đặc biệt `SPOILED`.
@@ -28,7 +28,7 @@ Phương pháp:
 6. Chỉ sau khi đã chốt cấu hình mới dùng test để báo cáo cuối.
 7. Đánh giá cả router riêng, expert với oracle category và end-to-end.
 8. Export mỗi Unified run bằng `--name` và mỗi Legacy pipeline bằng
-   `--bundle-name`; chọn đúng hai artifact trên web.
+   `--bundle-name`; tích các artifact cần so sánh trên web.
 
 Không dùng test accuracy để chọn model, threshold, learning rate hoặc epoch.
 Nếu đã xem test nhiều lần để ra quyết định, test đó đã trở thành validation và
@@ -64,6 +64,10 @@ ngoài tiêu chí xếp hạng.
 Snapshot Legacy `models/legacy/original` được train trước split sạch, vì vậy
 không dùng metric của snapshot này làm kết quả chính thức. Hãy train lại rồi
 lấy số liệu từ `runs/<run>/summary.json`.
+
+Router Legacy hiện có 7 lớp; ngoài macro-F1 cần xem recall riêng
+`UNSUPPORTED` và `NON_FOOD`. Router 5 lớp trong snapshot `original` chỉ dùng
+làm baseline lịch sử trên ảnh `SUPPORTED`.
 
 Với Unified, dùng validation food macro-F1 để chọn checkpoint mặc định và xem
 thêm recall từng food status. Web batch sinh seed mới ở mỗi lượt để duyệt các

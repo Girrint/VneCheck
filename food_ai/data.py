@@ -1,10 +1,11 @@
 import os
 import warnings
+from collections import Counter
 from pathlib import Path
 
 import torch
 from PIL import ImageOps
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torchvision.datasets.folder import IMG_EXTENSIONS
@@ -42,6 +43,47 @@ class NonEmptyImageFolder(ImageFolder):
         if not classes:
             raise FileNotFoundError(f"Không có lớp nào chứa ảnh trong {directory}")
         return classes, {name: index for index, name in enumerate(classes)}
+
+
+class CombinedClassDataset(Dataset):
+    """Ghép nhiều ImageFolder và ánh xạ target về một class order cố định."""
+
+    def __init__(self, roots, classes, transform):
+        self.classes = list(classes)
+        self.class_to_idx = {
+            name: index for index, name in enumerate(self.classes)
+        }
+        self.datasets = []
+        self.index = []
+        self.targets = []
+        seen_classes = set()
+        for root in roots:
+            dataset = NonEmptyImageFolder(root, transform=transform)
+            unknown = sorted(set(dataset.classes) - set(self.classes))
+            if unknown:
+                raise ValueError(f"Nhãn không hợp lệ tại {root}: {unknown}")
+            self.datasets.append(dataset)
+            dataset_index = len(self.datasets) - 1
+            for sample_index, target in enumerate(dataset.targets):
+                name = dataset.classes[target]
+                mapped = self.class_to_idx[name]
+                self.index.append((dataset_index, sample_index, mapped))
+                self.targets.append(mapped)
+                seen_classes.add(name)
+        missing = sorted(set(self.classes) - seen_classes)
+        if missing:
+            raise ValueError(f"Dataset ghép thiếu lớp: {missing}")
+        self.class_counts = Counter(
+            self.classes[target] for target in self.targets
+        )
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        dataset_index, sample_index, target = self.index[index]
+        image, _ = self.datasets[dataset_index][sample_index]
+        return image, target
 
 
 class PrepareImage:
@@ -136,3 +178,57 @@ def create_loaders(
     valid_loader = DataLoader(valid_dataset, shuffle=False, **options)
     test_loader = DataLoader(test_dataset, shuffle=False, **options)
     return train_loader, valid_loader, test_loader, train_dataset.classes
+
+
+def create_router_dataset(positive_root, negative_root, transform, classes):
+    return CombinedClassDataset(
+        [positive_root, negative_root], classes, transform
+    )
+
+
+def create_router_loaders(
+    positive_root,
+    negative_root,
+    batch_size,
+    workers,
+    classes,
+):
+    train_transform, eval_transform = build_transforms()
+    datasets = {
+        "train": create_router_dataset(
+            Path(positive_root) / "train",
+            Path(negative_root) / "train",
+            train_transform,
+            classes,
+        ),
+        "valid": create_router_dataset(
+            Path(positive_root) / "valid",
+            Path(negative_root) / "valid",
+            eval_transform,
+            classes,
+        ),
+        "test": create_router_dataset(
+            Path(positive_root) / "test",
+            Path(negative_root) / "test",
+            eval_transform,
+            classes,
+        ),
+    }
+    use_cuda = torch.cuda.is_available()
+    options = {
+        "batch_size": batch_size,
+        "num_workers": workers,
+        "pin_memory": use_cuda,
+    }
+    if workers > 0:
+        options.update(persistent_workers=True, prefetch_factor=2)
+    loaders = {
+        split: DataLoader(
+            dataset,
+            shuffle=split == "train",
+            drop_last=split == "train" and use_cuda,
+            **options,
+        )
+        for split, dataset in datasets.items()
+    }
+    return loaders["train"], loaders["valid"], loaders["test"], list(classes)

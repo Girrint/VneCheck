@@ -63,11 +63,15 @@ Hai transfer-learning mode:
 ## 4. Inference hai tầng
 
 1. Preprocess ảnh thành tensor `[1, 3, 224, 224]`.
-2. Router tạo logits 5 category; softmax và argmax chọn category.
-3. Nạp expert tương ứng.
-4. Expert tạo logits freshness theo class list trong checkpoint.
-5. Softmax, argmax và tính freshness score.
-6. Trả JSON gồm nhãn, confidence, score và cảnh báo.
+2. Router tạo logits 7 lớp: 5 category, `UNSUPPORTED`, `NON_FOOD`.
+3. Nếu top-1 là negative, trả kết quả từ chối và không chạy expert.
+4. Nếu top-1 là category, nạp expert tương ứng.
+5. Expert tạo logits freshness theo class list trong checkpoint.
+6. Softmax, argmax và tính freshness score.
+7. Trả JSON gồm nhãn, confidence, score và cảnh báo.
+
+Router ghép `data_split/<split>` với `data_negative/<split>` và mặc định dùng
+class weight `sqrt_inverse`. Freshness expert chỉ đọc `data_split`.
 
 ## 5. Huấn luyện và inference unified
 
@@ -90,8 +94,10 @@ recall `SPOILED`, không chỉ xem accuracy tổng.
 
 `evaluate_end_to_end.py` báo ba tầng kết quả:
 
-- Router category.
+- Router 7 lớp, gồm 5 category và 2 lớp negative.
 - Freshness khi dùng đúng category thật (oracle routing).
 - Freshness khi category do router dự đoán (pipeline thực).
 
 Các expert 2 lớp và 3 lớp được quy về tên lớp chung khi cộng confusion matrix.
+Nếu router từ chối nhầm ảnh `SUPPORTED`, end-to-end ghi dự đoán `REJECTED` và
+tính là sai thay vì bỏ mẫu đó khỏi mẫu số.

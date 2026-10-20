@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from food_ai.config import CATEGORIES, FRESHNESS_CLASSES
+from food_ai.config import CATEGORIES, FRESHNESS_CLASSES, ROUTER_CLASSES
 from scripts.resplit_dataset import prepare_unique_records, split_clusters
 
 
@@ -13,6 +13,12 @@ class ContractTests(unittest.TestCase):
 
     def test_freshness_order_is_stable(self):
         self.assertEqual(FRESHNESS_CLASSES, ("FRESH", "HALF-FRESH", "SPOILED"))
+
+    def test_legacy_router_has_categories_and_negative_classes(self):
+        self.assertEqual(
+            ROUTER_CLASSES,
+            CATEGORIES + ("UNSUPPORTED", "NON_FOOD"),
+        )
 
 
 class DatasetSplitTests(unittest.TestCase):
@@ -72,6 +78,35 @@ class DatasetSplitTests(unittest.TestCase):
 
 
 class PreprocessingTests(unittest.TestCase):
+    def test_router_dataset_maps_positive_and_negative_to_fixed_order(self):
+        import torch
+        from food_ai.data import CombinedClassDataset
+
+        class FakeDataset:
+            def __init__(self, root, transform=None):
+                if str(root) == "positive":
+                    self.classes = list(CATEGORIES)
+                    self.targets = list(range(len(CATEGORIES)))
+                else:
+                    self.classes = ["NON_FOOD", "UNSUPPORTED"]
+                    self.targets = [0, 1]
+
+            def __getitem__(self, index):
+                return torch.zeros(3, 224, 224), self.targets[index]
+
+        with patch("food_ai.data.NonEmptyImageFolder", FakeDataset):
+            dataset = CombinedClassDataset(
+                ["positive", "negative"], ROUTER_CLASSES, transform=None
+            )
+
+        self.assertEqual(dataset.classes, list(ROUTER_CLASSES))
+        self.assertEqual(
+            dataset.targets,
+            [0, 1, 2, 3, 4, 6, 5],
+        )
+        self.assertEqual(dataset.class_counts["UNSUPPORTED"], 1)
+        self.assertEqual(dataset.class_counts["NON_FOOD"], 1)
+
     def test_eval_transform_has_model_input_shape(self):
         try:
             import numpy as np
@@ -280,6 +315,7 @@ class LocalWebNegativeTests(unittest.TestCase):
         app.legacy_model = SimpleNamespace(
             ready=False,
             error="disabled",
+            food_gate_ready=False,
             bundle_id="disabled",
             display_name="Disabled legacy",
             router_architecture="test_router",
@@ -334,6 +370,104 @@ class LocalWebNegativeTests(unittest.TestCase):
 
         self.assertEqual([model.model_id for model in unified], ["u2", "u1"])
         self.assertEqual([bundle.bundle_id for bundle in legacy], ["l2", "l1"])
+
+    def test_legacy_seven_class_router_scores_negative_samples(self):
+        import io
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from local_web.server import LocalEvaluationApp
+
+        samples = [
+            {
+                "path": "cu/FRESH/carrot/a.jpg", "dataset": "supported",
+                "food_status": "SUPPORTED", "category": "cu",
+                "freshness": "FRESH", "product": "carrot",
+            },
+            {
+                "path": "UNSUPPORTED/b.jpg", "dataset": "negative",
+                "food_status": "UNSUPPORTED", "category": "",
+                "freshness": "", "product": "",
+            },
+            {
+                "path": "NON_FOOD/c.jpg", "dataset": "negative",
+                "food_status": "NON_FOOD", "category": "",
+                "freshness": "", "product": "",
+            },
+        ]
+
+        def predict_batch(paths, truth_categories):
+            outputs = []
+            for path, truth_category in zip(paths, truth_categories):
+                if "UNSUPPORTED" in str(path):
+                    status, route = "UNSUPPORTED", "UNSUPPORTED"
+                elif "NON_FOOD" in str(path):
+                    status, route = "NON_FOOD", "NON_FOOD"
+                else:
+                    status, route = "SUPPORTED", "cu"
+                pipeline = None
+                oracle = None
+                if truth_category:
+                    pipeline = {
+                        "category": "cu", "category_confidence": 0.9,
+                        "freshness": "FRESH", "freshness_confidence": 0.9,
+                        "estimated_freshness_score": 9.0, "class_count": 2,
+                        "freshness_probabilities": {"FRESH": 0.9, "SPOILED": 0.1},
+                    }
+                    oracle = {
+                        "category": "cu", "freshness": "FRESH",
+                        "freshness_confidence": 0.9,
+                        "estimated_freshness_score": 9.0, "class_count": 2,
+                        "freshness_probabilities": {"FRESH": 0.9, "SPOILED": 0.1},
+                    }
+                outputs.append({
+                    "food_status": status, "food_confidence": 0.9,
+                    "food_probabilities": {
+                        name: (0.9 if name == status else 0.05)
+                        for name in ("SUPPORTED", "UNSUPPORTED", "NON_FOOD")
+                    },
+                    "router_label": route, "router_confidence": 0.9,
+                    "router_probabilities": {name: (0.9 if name == route else 0.0) for name in ROUTER_CLASSES},
+                    "pipeline": pipeline, "oracle": oracle,
+                })
+            return outputs
+
+        bundle = SimpleNamespace(
+            ready=True, error=None, food_gate_ready=True,
+            bundle_id="legacy7", display_name="Legacy 7",
+            router_architecture="test", expert_architectures={},
+            descriptor=lambda: {
+                "id": "legacy7", "display_name": "Legacy 7",
+                "router_architecture": "test", "food_gate_ready": True,
+            },
+            predict_batch=predict_batch,
+        )
+        app = LocalEvaluationApp.__new__(LocalEvaluationApp)
+        app.samples = samples
+        app.by_path = {sample["path"]: sample for sample in samples}
+        app.default_unified_model_id = "unused"
+        app.default_legacy_bundle_id = "legacy7"
+        app.legacy_bundle = lambda bundle_id=None: bundle
+        app.unified_model = lambda model_id=None: None
+        app.resolve_sample_path = lambda path: Path(path)
+        csv_path = MagicMock()
+        csv_path.name = "legacy7.csv"
+        csv_path.open.return_value.__enter__.return_value = io.StringIO()
+        summary_path = MagicMock()
+        summary_path.name = "legacy7.json"
+        app._report_paths = lambda: (csv_path, summary_path)
+
+        result = app.evaluate(
+            None, None, None, 0, 42,
+            model_mode="legacy", legacy_bundle_ids=["legacy7"],
+        )
+        metrics = result["models"]["legacy"][0]["metrics"]
+
+        self.assertEqual(metrics["food_accuracy"], 1.0)
+        self.assertEqual(metrics["pipeline_category_accuracy"], 1.0)
+        self.assertEqual(metrics["pipeline_freshness_accuracy"], 1.0)
+        self.assertEqual(metrics["pipeline_joint_accuracy"], 1.0)
+        self.assertEqual(metrics["food_recall"]["NON_FOOD"], 1.0)
 
     def test_model_id_string_is_treated_as_one_id(self):
         from types import SimpleNamespace

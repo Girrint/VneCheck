@@ -207,10 +207,10 @@ def show_help() -> None:
 HELP
 ====
 
-1. Train category router
-   Trains a five-class model that routes an image to livestock, poultry,
-   vegetables, tubers, or fruits. Every category needs images in both
-   data_split/train, data_split/valid, and data_split/test.
+1. Train seven-class router
+   Trains five supported food categories plus UNSUPPORTED and NON_FOOD.
+   Supported images come from data_split; negative images come from
+   data_negative. Negative predictions stop before the freshness experts.
 
 2. Train freshness expert
    Trains one category-specific model. Its outputs are inferred from the
@@ -274,7 +274,7 @@ Food Freshness AI
     print(
         """
 
-1. Train category router
+1. Train 7-class router
 2. Train freshness expert
 3. Predict an image
 4. Dataset status

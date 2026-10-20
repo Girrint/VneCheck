@@ -12,6 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from food_ai.config import (
     CATEGORIES,
+    FOOD_STATUS_CLASSES,
     IMAGE_SIZE,
     MODEL_DIR,
 )
@@ -119,14 +120,22 @@ def main() -> None:
             "sha256": sha256(destination),
         })
 
-    if bundle_id:
+    if bundle_id or args.output_root:
+        manifest_id = bundle_id or safe_bundle_name(output_root.name)
+        router_classes = checkpoints["router"]["classes"]
         manifest = {
-            "bundle_version": 1,
-            "bundle_id": bundle_id,
-            "name": bundle_id,
-            "display_name": args.display_name or args.bundle_name,
+            "bundle_version": 2,
+            "bundle_id": manifest_id,
+            "name": manifest_id,
+            "display_name": args.display_name or args.bundle_name or manifest_id,
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "preprocessing": preprocessing_metadata(),
+            "router_contract": {
+                "classes": router_classes,
+                "food_gate_ready": all(
+                    name in router_classes for name in FOOD_STATUS_CLASSES[1:]
+                ),
+            },
             "checkpoints": checkpoints,
             "artifacts": artifacts,
         }

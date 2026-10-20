@@ -201,17 +201,16 @@ Sau mỗi batch, web sinh hai report trong `reports/web_evaluations/`:
 Hai nút tải xuất hiện ngay dưới kết quả batch.
 
 Bộ lọc `Loại ảnh` cho phép chấm riêng `SUPPORTED`, `UNSUPPORTED` hoặc
-`NON_FOOD`. Unified được chấm food accuracy/recall trên cả ba nhãn;
-category/freshness và legacy chỉ được chấm trên ảnh `SUPPORTED`. CSV có cả
-`truth_food_status`, dự đoán, confidence, xác suất và cờ đúng/sai của food head.
+`NON_FOOD`. Unified và Legacy router 7 lớp được chấm food accuracy/recall trên
+cả ba nhãn; category/freshness chỉ được chấm trên ảnh `SUPPORTED`. CSV có cả
+`truth_food_status`, dự đoán, confidence, xác suất và cờ đúng/sai.
 
 Mục `Chế độ đánh giá` cho phép chạy `Chỉ Unified`, `Chỉ Legacy` hoặc cả hai.
 Hai danh sách checkbox cho phép chọn một hoặc nhiều Unified artifact và một
 hoặc nhiều Legacy bundle hoàn chỉnh gồm router và năm expert. Tất cả hiển thị
 tên cùng kiến trúc đã train và chạy trên đúng cùng danh sách ảnh để so sánh.
-Model không được tích sẽ không chạy inference. Khi lọc
-`UNSUPPORTED`/`NON_FOOD`, lựa chọn Legacy bị vô hiệu hóa vì pipeline cũ không
-có output food status.
+Model không được tích sẽ không chạy inference. Khi lọc negative, bundle Legacy
+router 7 lớp vẫn chọn được; bundle router 5 lớp cũ tự bị vô hiệu hóa.
 
 Giao diện desktop chia hai cột: bộ lọc và điều khiển ở bên trái; metric cùng
 kết quả từng ảnh ở bên phải. Mỗi model tạo một thẻ kết quả riêng cho cùng ảnh.

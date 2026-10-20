@@ -17,9 +17,15 @@ from food_ai.config import (
     DATA_DIR,
     FRESHNESS_CLASSES,
     MODEL_DIR,
+    NEGATIVE_DATA_DIR,
+    ROUTER_CLASSES,
     freshness_model,
 )
-from food_ai.data import create_loaders, preprocessing_metadata
+from food_ai.data import (
+    create_loaders,
+    create_router_loaders,
+    preprocessing_metadata,
+)
 from food_ai.experiment import (
     ExperimentTracker,
     classification_report,
@@ -32,6 +38,7 @@ from food_ai.model import (
     create_model,
     trainable_parameters,
 )
+from food_ai.unified_loss import FOOD_CLASS_BALANCE_MODES, compute_class_weights
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 USE_CUDA = DEVICE.type == "cuda"
@@ -67,12 +74,23 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-name")
     parser.add_argument(
+        "--negative-root", type=Path, default=NEGATIVE_DATA_DIR,
+        help="Dataset UNSUPPORTED/NON_FOOD; chỉ router sử dụng.",
+    )
+    parser.add_argument(
+        "--class-balance", choices=FOOD_CLASS_BALANCE_MODES,
+        default="sqrt_inverse",
+        help="Cân bằng class cho router 7 lớp.",
+    )
+    parser.add_argument(
         "--resume",
         help="Resume từ last_checkpoint.pth hoặc best_model.pth; epochs là tổng mục tiêu.",
     )
 
     subparsers = parser.add_subparsers(dest="task", required=True)
-    subparsers.add_parser("router", help="Huấn luyện nhận diện 5 nhóm")
+    subparsers.add_parser(
+        "router", help="Huấn luyện 5 nhóm + UNSUPPORTED + NON_FOOD"
+    )
     expert = subparsers.add_parser("freshness", help="Huấn luyện expert độ tươi")
     expert.add_argument("--category", required=True, choices=CATEGORIES)
     return parser.parse_args()
@@ -179,20 +197,30 @@ def main():
 
     train_root, valid_root, test_root, output_path = resolve_task(args)
     try:
-        train_loader, valid_loader, test_loader, classes = create_loaders(
-            train_root,
-            valid_root,
-            test_root,
-            args.batch_size,
-            args.workers,
-        )
+        if args.task == "router":
+            train_loader, valid_loader, test_loader, classes = create_router_loaders(
+                DATA_DIR,
+                args.negative_root,
+                args.batch_size,
+                args.workers,
+                ROUTER_CLASSES,
+            )
+        else:
+            train_loader, valid_loader, test_loader, classes = create_loaders(
+                train_root,
+                valid_root,
+                test_root,
+                args.batch_size,
+                args.workers,
+            )
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"Dữ liệu chưa sẵn sàng: {error}") from error
 
     if args.task == "router":
-        missing = sorted(set(CATEGORIES) - set(classes))
-        if missing:
-            print(f"Cảnh báo: router thiếu nhóm dữ liệu {missing}; train theo các nhóm hiện có.")
+        if list(classes) != list(ROUTER_CLASSES):
+            raise SystemExit(
+                f"Router class order không hợp lệ: {classes} != {list(ROUTER_CLASSES)}"
+            )
     if args.task == "freshness":
         unknown = sorted(set(classes) - set(FRESHNESS_CLASSES))
         if unknown:
@@ -217,6 +245,9 @@ def main():
         "train_images": len(train_loader.dataset),
         "valid_images": len(valid_loader.dataset),
         "test_images": len(test_loader.dataset),
+        "class_counts": dict(
+            getattr(train_loader.dataset, "class_counts", {})
+        ),
         "preprocessing": preprocessing_metadata(),
         "device": device_name,
         "python": sys.version,
@@ -243,6 +274,11 @@ def main():
         resume_checkpoint = torch.load(
             resume_path, map_location=DEVICE, weights_only=False
         )
+        if list(resume_checkpoint.get("classes", ())) != list(classes):
+            raise SystemExit(
+                "Checkpoint resume không cùng class contract: "
+                f"{resume_checkpoint.get('classes')} != {classes}"
+            )
         model.load_state_dict(resume_checkpoint["state_dict"])
         print(f"Resume checkpoint: {resume_path}")
     if USE_CUDA:
@@ -251,9 +287,25 @@ def main():
     parameters = trainable_parameters(model)
     config["total_parameters"] = sum(parameter.numel() for parameter in model.parameters())
     config["trainable_parameters"] = sum(parameter.numel() for parameter in parameters)
-    tracker = ExperimentTracker(run_dir, config, resume=resume_path is not None)
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    class_weights = None
+    if args.task == "router":
+        class_weights = compute_class_weights(
+            train_loader.dataset.class_counts,
+            classes,
+            args.class_balance,
+        )
+        if class_weights is not None:
+            class_weights = class_weights.to(DEVICE)
+            config["class_weights"] = {
+                name: float(class_weights[index].cpu())
+                for index, name in enumerate(classes)
+            }
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+        label_smoothing=args.label_smoothing,
+    )
+    tracker = ExperimentTracker(run_dir, config, resume=resume_path is not None)
     optimizer = build_optimizer(args, parameters)
     if args.scheduler == "plateau":
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(

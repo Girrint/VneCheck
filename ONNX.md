@@ -152,8 +152,14 @@ kỳ checkpoint nào để tránh vô tình trộn model từ hai lần train. V
 copy checkpoint tốt nhất vào `models/`, hãy train đủ sáu task của một kiến trúc
 rồi export bundle **trước khi** bắt đầu kiến trúc tiếp theo:
 
+Router mới có 7 output và đọc cả `data_negative`; router dự đoán
+`UNSUPPORTED`/`NON_FOOD` sẽ không gọi expert. Snapshot `original` dùng router 5
+lớp nên chỉ là baseline tương thích ảnh `SUPPORTED` và không thể resume để
+train tiếp thành 7 lớp.
+
 ```powershell
-python train.py --model resnet18 router
+python train.py --model resnet18 --negative-root data_negative `
+  --class-balance sqrt_inverse router
 python train.py --model resnet18 freshness --category cu
 python train.py --model resnet18 freshness --category gia_cam
 python train.py --model resnet18 freshness --category gia_suc
@@ -162,8 +168,8 @@ python train.py --model resnet18 freshness --category rau
 python export_onnx.py --bundle-name resnet18_v1 --display-name "ResNet18 legacy v1"
 ```
 
-Sau đó lặp lại với kiến trúc khác và một `--bundle-name` mới. Tất cả vẫn dùng
-cùng `data_split/train`, `valid`, `test`.
+Sau đó lặp lại với kiến trúc khác và một `--bundle-name` mới. Router luôn dùng
+cùng `data_split` + `data_negative`; expert chỉ dùng `data_split`.
 
 Tên bundle đề xuất cho bốn backbone:
 
@@ -181,9 +187,8 @@ dùng lại ID trong cùng một registry nếu muốn giữ phiên bản cũ; t
 Lệnh cũ `python export_onnx.py` vẫn export vào `models/`, nhưng output đó không
 nằm trong registry bundle mặc định của web.
 
-Hoặc chỉ định thư mục thủ công. Cách này không sinh manifest metadata; nếu
-output nằm dưới registry `models/legacy`, web vẫn liệt kê bundle nhưng tên kiến
-trúc sẽ là `unknown`:
+Hoặc chỉ định thư mục thủ công. Script vẫn sinh `manifest.json` để web đọc đúng
+class order và nhận biết router 7 lớp:
 
 ```powershell
 python export_onnx.py `

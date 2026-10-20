@@ -17,7 +17,10 @@ Ngày cập nhật: 2026-10-20.
 
 ## Pipeline Legacy
 
-- Router 5 lớp chọn một trong 5 freshness expert.
+- Router 7 lớp học trực tiếp từ supported và negative. Năm category chọn
+  freshness expert; `UNSUPPORTED`/`NON_FOOD` dừng trước expert.
+- Router mặc định dùng `sqrt_inverse` class weight; train/valid/test lần lượt
+  có 73.115/15.672/15.662 ảnh sau khi ghép hai dataset.
 - `cu`, `qua`, `rau` dùng expert 2 lớp; `gia_cam`, `gia_suc` dùng expert 3 lớp.
 - Train/valid/test được load độc lập; validation chọn checkpoint, test chỉ chấm
   sau khi nạp checkpoint tốt nhất.
@@ -48,8 +51,9 @@ Ngày cập nhật: 2026-10-20.
 - Đánh giá một ảnh hoặc batch 25/100/500/1.000/5.000/toàn bộ.
 - Mỗi batch dùng seed mới nên lần chạy sau chọn nhóm ảnh khác; trong
   cùng batch không lặp đường dẫn. Seed được lưu trong JSON report.
-- Metric food áp dụng trên cả ba food status; category/freshness và Legacy chỉ
-  áp dụng trên `SUPPORTED`.
+- Metric food áp dụng trên cả ba food status cho Unified và Legacy router 7
+  lớp; category/freshness chỉ áp dụng trên `SUPPORTED`. Bundle Legacy 5 lớp cũ
+  vẫn chỉ chấm được `SUPPORTED`.
 - CSV lưu kết quả từng ảnh, model ID/tên/kiến trúc, confidence, probability và
   cờ đúng/sai; JSON lưu bộ lọc, seed và metric tổng hợp.
 

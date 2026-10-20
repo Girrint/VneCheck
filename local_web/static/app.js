@@ -85,6 +85,7 @@ function renderPicker(containerId, items, defaultId, type) {
     label.innerHTML = `
       <input id="${escapeHtml(id)}" type="checkbox" value="${escapeHtml(item.id)}"
         data-invalid="${String(!item.ready)}"
+        data-food-gate="${String(Boolean(item.food_gate_ready))}"
         ${item.id === selectedId ? "checked" : ""}
         ${item.ready ? "" : "disabled"}>
       <span>${escapeHtml(item.display_name)}<small>${escapeHtml(architecture || "unknown")}${item.ready ? "" : ` · ${escapeHtml(item.error || "lỗi")}`}</small></span>`;
@@ -128,17 +129,22 @@ function resultCard(data) {
       </div>
     </article>` : `<div class="model-missing">${escapeHtml(data.unified.modelName || "Unified")}: ${escapeHtml(data.unified.error || "ONNX chưa sẵn sàng")}</div>`) : "";
 
+  const legacyPipeline = data.legacy?.category ? `
+        <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.legacy.category))}</strong><span>${percent(data.legacy.categoryConfidence)}</span></div>
+        <div class="prediction"><small>Expert ${escapeHtml(data.legacy.classCount)}</small><strong>${escapeHtml(labelFor("freshness", data.legacy.freshness))}</strong><span>${percent(data.legacy.freshnessConfidence)}</span></div>` : "";
+  const legacyOracle = data.legacy?.oracleFreshness ? `
+        <div class="prediction"><small>Oracle expert</small><strong>${escapeHtml(labelFor("freshness", data.legacy.oracleFreshness))}</strong><span>${data.legacy.oracleCorrect ? "Đúng" : "Sai"} · ${escapeHtml(data.legacy.oracleClassCount)} lớp</span></div>` : "";
   const legacy = data.legacy ? (data.legacy.available ? `
     <article class="model-card">
       <div class="model-card-header"><strong>${escapeHtml(data.legacy.bundleName || "Legacy")} · ${escapeHtml(data.legacy.routerArchitecture || "router")} → expert</strong><span class="verdict ${data.legacy.jointCorrect ? "" : "wrong"}">${data.legacy.jointCorrect ? "Đúng" : "Sai"}</span></div>
       <div class="prediction-grid">
-        <div class="prediction"><small>Router</small><strong>${escapeHtml(labelFor("categories", data.legacy.category))}</strong><span>${percent(data.legacy.categoryConfidence)}</span></div>
-        <div class="prediction"><small>Expert ${escapeHtml(data.legacy.classCount)} lớp</small><strong>${escapeHtml(labelFor("freshness", data.legacy.freshness))}</strong><span>${percent(data.legacy.freshnessConfidence)}</span></div>
-        <div class="prediction"><small>Oracle expert</small><strong>${escapeHtml(labelFor("freshness", data.legacy.oracleFreshness))}</strong><span>${data.legacy.oracleCorrect ? "Đúng" : "Sai"} · ${escapeHtml(data.legacy.oracleClassCount)} lớp</span></div>
+        <div class="prediction"><small>Food status</small><strong>${escapeHtml(labelFor("food_statuses", data.legacy.foodStatus))}</strong><span>${percent(data.legacy.foodConfidence)}</span></div>
+        ${legacyPipeline}${legacyOracle}
       </div>
       <div class="probabilities">
-        <div class="probability-group"><h4>Router probabilities</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
-        <div class="probability-group"><h4>Pipeline expert probabilities</h4>${probabilityBars(data.legacy.freshnessProbabilities)}</div>
+        <div class="probability-group"><h4>Food status probabilities</h4>${probabilityBars(data.legacy.foodProbabilities)}</div>
+        <div class="probability-group"><h4>Router 7 lớp</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
+        ${data.legacy.freshness ? `<div class="probability-group"><h4>Pipeline expert probabilities</h4>${probabilityBars(data.legacy.freshnessProbabilities)}</div>` : ""}
       </div>
     </article>` : `<div class="model-missing">${escapeHtml(data.legacy.bundleName || "Legacy")}: ${escapeHtml(data.legacy.error || (data.legacy.applicable === false ? "Không áp dụng cho ảnh negative" : "ONNX chưa sẵn sàng"))}</div>`) : "";
 
@@ -191,17 +197,20 @@ function legacyEntryToCard(sample, entry) {
       available: true,
       bundleName: entry.bundle?.display_name,
       routerArchitecture: entry.bundle?.router_architecture,
-      category: entry.pipeline.category,
-      categoryConfidence: entry.pipeline.category_confidence,
-      freshness: entry.pipeline.freshness,
-      freshnessConfidence: entry.pipeline.freshness_confidence,
-      classCount: entry.pipeline.class_count,
-      jointCorrect: entry.pipeline.correct.joint,
-      oracleFreshness: entry.oracle.freshness,
-      oracleCorrect: entry.oracle.correct.freshness,
-      oracleClassCount: entry.oracle.class_count,
-      categoryProbabilities: entry.pipeline.category_probabilities,
-      freshnessProbabilities: entry.pipeline.freshness_probabilities,
+      foodStatus: entry.food_status,
+      foodConfidence: entry.food_confidence,
+      foodProbabilities: entry.food_probabilities,
+      category: entry.pipeline?.category,
+      categoryConfidence: entry.pipeline?.category_confidence,
+      freshness: entry.pipeline?.freshness,
+      freshnessConfidence: entry.pipeline?.freshness_confidence,
+      classCount: entry.pipeline?.class_count,
+      jointCorrect: entry.joint_correct,
+      oracleFreshness: entry.oracle?.freshness,
+      oracleCorrect: entry.oracle?.correct?.freshness,
+      oracleClassCount: entry.oracle?.class_count,
+      categoryProbabilities: entry.router_probabilities,
+      freshnessProbabilities: entry.pipeline?.freshness_probabilities,
     } : {
       available: false,
       applicable: entry.applicable !== false,
@@ -233,13 +242,18 @@ function csvToCard(row) {
     },
   };
   if (row.evaluation_model_type === "legacy" || row.legacy_bundle_id) {
+    const routedCategory = ["cu", "gia_cam", "gia_suc", "qua", "rau"].includes(row.legacy_router_category)
+      ? row.legacy_router_category : "";
     base.legacy = {
       available: booleanValue(row.legacy_available),
       applicable: booleanValue(row.evaluation_applicable),
       bundleName: row.legacy_bundle_name || row.evaluation_model_name,
       routerArchitecture: row.legacy_router_architecture || row.evaluation_model_architecture,
       error: row.evaluation_error,
-      category: row.legacy_router_category,
+      foodStatus: row.legacy_food_status || (row.legacy_router_category && ["UNSUPPORTED", "NON_FOOD"].includes(row.legacy_router_category) ? row.legacy_router_category : "SUPPORTED"),
+      foodConfidence: row.legacy_food_confidence || row.legacy_router_confidence,
+      foodProbabilities: collect("legacy_food_probability_", ["SUPPORTED", "UNSUPPORTED", "NON_FOOD"]),
+      category: routedCategory,
       categoryConfidence: row.legacy_router_confidence,
       freshness: row.legacy_pipeline_freshness,
       freshnessConfidence: row.legacy_pipeline_freshness_confidence,
@@ -248,7 +262,7 @@ function csvToCard(row) {
       oracleFreshness: row.legacy_oracle_freshness,
       oracleCorrect: booleanValue(row.legacy_oracle_correct),
       oracleClassCount: row.legacy_oracle_expert_classes,
-      categoryProbabilities: collect("legacy_router_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau"]),
+      categoryProbabilities: collect("legacy_router_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau", "UNSUPPORTED", "NON_FOOD"]),
       freshnessProbabilities: collect("legacy_pipeline_probability_", ["FRESH", "HALF-FRESH", "SPOILED"]),
     };
   } else {
@@ -319,8 +333,10 @@ function syncControls() {
   const legacyOption = $("modelFilter").querySelector('option[value="legacy"]');
   const unifiedOption = $("modelFilter").querySelector('option[value="unified"]');
   const unifiedReady = state.status?.unified_models?.some((model) => model.ready);
-  const legacyReady = state.status?.legacy_bundles?.some((bundle) => bundle.ready);
-  legacyOption.disabled = negative || !legacyReady;
+  const legacyReady = state.status?.legacy_bundles?.some(
+    (bundle) => bundle.ready && (!negative || bundle.food_gate_ready)
+  );
+  legacyOption.disabled = !legacyReady;
   unifiedOption.disabled = !unifiedReady;
   if (legacyOption.disabled && $("modelFilter").value === "legacy") $("modelFilter").value = "unified";
 
@@ -330,7 +346,8 @@ function syncControls() {
     input.closest("label")?.classList.toggle("disabled", input.disabled);
   });
   $("legacyBundleFilter").querySelectorAll("input").forEach((input) => {
-    input.disabled = input.dataset.invalid === "true" || mode === "unified" || negative;
+    input.disabled = input.dataset.invalid === "true" || mode === "unified"
+      || (negative && input.dataset.foodGate !== "true");
     input.closest("label")?.classList.toggle("disabled", input.disabled);
   });
   const unifiedCount = selectedIds("unifiedModelFilter").length;
@@ -338,7 +355,7 @@ function syncControls() {
   const runnable = mode === "unified"
     ? unifiedCount > 0
     : mode === "legacy"
-      ? legacyCount > 0 && !negative
+      ? legacyCount > 0
       : unifiedCount + legacyCount > 0;
   $("randomButton").disabled = !runnable;
   $("evaluateButton").disabled = !runnable;
@@ -398,7 +415,7 @@ function renderSummary(result) {
   const legacyReady = legacy.filter((item) => item.ready);
   $("legacySummary").textContent = `${legacyReady.length}/${legacy.length} bundle`;
   $("legacySubSummary").innerHTML = legacy.length ? legacy.map((item) => item.ready
-    ? `<b>${escapeHtml(item.bundle.display_name)}</b> · Cat ${percent(item.metrics.pipeline_category_accuracy)} · Fresh ${percent(item.metrics.pipeline_freshness_accuracy)} · Joint ${percent(item.metrics.pipeline_joint_accuracy)}`
+    ? `<b>${escapeHtml(item.bundle.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.pipeline_category_accuracy)} · Fresh ${percent(item.metrics.pipeline_freshness_accuracy)} · Joint ${percent(item.metrics.pipeline_joint_accuracy)}`
     : `<b>${escapeHtml(item.bundle?.display_name || "Legacy")}</b> · ${escapeHtml(item.error || "Không áp dụng")}`
   ).join("<br>") : "Không chọn Legacy";
   $("oracleSummary").textContent = legacyReady.length ? `${legacyReady.length} bundle` : "Chưa có";

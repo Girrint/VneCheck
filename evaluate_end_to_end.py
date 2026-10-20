@@ -9,12 +9,15 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 
 from food_ai.config import (
+    CATEGORIES,
     DATA_DIR,
     FRESHNESS_CLASSES,
+    NEGATIVE_DATA_DIR,
+    ROUTER_CLASSES,
     ROUTER_MODEL,
     freshness_model,
 )
-from food_ai.data import build_transforms
+from food_ai.data import build_transforms, create_router_dataset
 from food_ai.model import load_checkpoint
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -29,7 +32,7 @@ def update_confusion(confusion, targets, predictions, classes):
         confusion[classes[target]][classes[prediction]] += 1
 
 
-def report(confusion, classes):
+def report(confusion, classes, macro_classes=None):
     rows = []
     for name in classes:
         true_positive = confusion[name][name]
@@ -43,7 +46,10 @@ def report(confusion, classes):
     correct = sum(confusion[name][name] for name in classes)
     return {
         "accuracy": correct / total if total else 0.0,
-        "macro_f1": sum(row["f1"] for row in rows) / len(rows),
+        "macro_f1": sum(
+            row["f1"] for row in rows
+            if row["class"] in set(macro_classes or classes)
+        ) / len(macro_classes or classes),
         "per_class": rows,
         "confusion_matrix": [[confusion[target][prediction] for prediction in classes] for target in classes],
     }
@@ -57,13 +63,18 @@ def predict(model, images):
 def main():
     parser = argparse.ArgumentParser(description="Đánh giá pipeline router -> freshness expert")
     parser.add_argument("--root", type=Path, default=DATA_DIR / "test")
+    parser.add_argument(
+        "--negative-root", type=Path, default=NEGATIVE_DATA_DIR / "test"
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
 
     _, eval_transform = build_transforms()
     router, router_classes = load_checkpoint(ROUTER_MODEL, DEVICE)
-    router_dataset = ImageFolder(args.root, transform=eval_transform)
-    if router_dataset.classes != router_classes:
+    router_dataset = create_router_dataset(
+        args.root, args.negative_root, eval_transform, ROUTER_CLASSES
+    )
+    if list(router_dataset.classes) != list(router_classes):
         raise ValueError(f"Nhãn dataset/router không khớp: {router_dataset.classes} != {router_classes}")
 
     router_loader = DataLoader(router_dataset, batch_size=args.batch_size, shuffle=False)
@@ -75,7 +86,7 @@ def main():
         update_confusion(router_confusion, labels, predictions, router_classes)
 
     experts = {}
-    for category in router_classes:
+    for category in CATEGORIES:
         checkpoint = freshness_model(category)
         if not checkpoint.exists():
             raise FileNotFoundError(f"Thiếu expert cho '{category}': {checkpoint}")
@@ -83,7 +94,8 @@ def main():
 
     oracle_confusion = defaultdict(lambda: defaultdict(int))
     end_to_end_confusion = defaultdict(lambda: defaultdict(int))
-    for category in router_classes:
+    pipeline_freshness_classes = FRESHNESS_CLASSES + ("REJECTED",)
+    for category in CATEGORIES:
         dataset = ImageFolder(args.root / category, transform=eval_transform)
         expert, classes = experts[category]
         if dataset.classes != classes:
@@ -112,6 +124,14 @@ def main():
                 images, target_indices, router_predictions
             ):
                 predicted_category = router_classes[router_prediction]
+                if predicted_category not in CATEGORIES:
+                    update_confusion(
+                        end_to_end_confusion,
+                        [pipeline_freshness_classes.index(FRESHNESS_CLASSES[target])],
+                        [pipeline_freshness_classes.index("REJECTED")],
+                        pipeline_freshness_classes,
+                    )
+                    continue
                 selected_expert, selected_classes = experts[predicted_category]
                 prediction = int(predict(selected_expert, image.unsqueeze(0))[0].cpu())
                 predicted_freshness = FRESHNESS_CLASSES.index(
@@ -119,22 +139,25 @@ def main():
                 )
                 update_confusion(
                     end_to_end_confusion,
-                    [target],
-                    [predicted_freshness],
-                    FRESHNESS_CLASSES,
+                    [pipeline_freshness_classes.index(FRESHNESS_CLASSES[target])],
+                    [pipeline_freshness_classes.index(FRESHNESS_CLASSES[predicted_freshness])],
+                    pipeline_freshness_classes,
                 )
 
     result = {
         "root": str(args.root),
+        "negative_root": str(args.negative_root),
         "device": str(DEVICE),
         "router": report(router_confusion, router_classes),
         "freshness_oracle_category": report(
             oracle_confusion, FRESHNESS_CLASSES
         ),
         "freshness_end_to_end": report(
-            end_to_end_confusion, FRESHNESS_CLASSES
+            end_to_end_confusion,
+            pipeline_freshness_classes,
+            macro_classes=FRESHNESS_CLASSES,
         ),
-        "note": "freshness_end_to_end chọn expert bằng dự đoán router; metric này phản ánh pipeline thật.",
+        "note": "Router 7 lớp từ chối UNSUPPORTED/NON_FOOD; freshness_end_to_end tính REJECTED là sai trên ảnh SUPPORTED.",
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

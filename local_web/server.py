@@ -31,6 +31,7 @@ from food_ai.config import (
     IMAGE_SIZE,
     IMAGENET_MEAN,
     IMAGENET_STD,
+    ROUTER_CLASSES,
     UNIFIED_ONNX_MODEL,
 )
 
@@ -68,12 +69,14 @@ REPORT_FIELDS = [
     *[f"unified_freshness_probability_{name}" for name in FRESHNESS_CLASSES],
     "legacy_available", "legacy_bundle_id", "legacy_bundle_name",
     "legacy_router_architecture", "legacy_expert_architectures",
+    "legacy_food_status", "legacy_food_confidence", "legacy_food_correct",
+    *[f"legacy_food_probability_{name}" for name in FOOD_STATUS_CLASSES],
     "legacy_router_category",
     "legacy_router_confidence", "legacy_pipeline_freshness",
     "legacy_pipeline_freshness_confidence", "legacy_pipeline_score",
     "legacy_pipeline_expert_classes", "legacy_category_correct",
     "legacy_freshness_correct", "legacy_joint_correct",
-    *[f"legacy_router_probability_{name}" for name in CATEGORIES],
+    *[f"legacy_router_probability_{name}" for name in ROUTER_CLASSES],
     *[f"legacy_pipeline_probability_{name}" for name in FRESHNESS_CLASSES],
     "legacy_oracle_category", "legacy_oracle_freshness",
     "legacy_oracle_confidence", "legacy_oracle_score",
@@ -344,6 +347,10 @@ class LegacyOnnxRuntimeModel:
         self._load_manifest()
         self._validate_files()
 
+    @property
+    def food_gate_ready(self):
+        return all(name in self.category_classes for name in FOOD_STATUS_CLASSES[1:])
+
     def _load_manifest(self):
         if not self.manifest_path.is_file():
             return
@@ -369,6 +376,12 @@ class LegacyOnnxRuntimeModel:
 
     def _validate_files(self):
         missing = []
+        valid_router_contracts = [list(CATEGORIES), list(ROUTER_CLASSES)]
+        if self.category_classes not in valid_router_contracts:
+            self.error = (
+                "Legacy router class contract không hợp lệ: "
+                f"{self.category_classes}"
+            )
         if not self.router_path.is_file():
             missing.append(str(self.router_path))
         for category in CATEGORIES:
@@ -391,6 +404,8 @@ class LegacyOnnxRuntimeModel:
             "ready": self.ready,
             "error": self.error,
             "router_architecture": self.router_architecture,
+            "router_classes": self.category_classes,
+            "food_gate_ready": self.food_gate_ready,
             "expert_architectures": self.expert_architectures,
             "expert_architecture_summary": ", ".join(expert_values) or "unknown",
             "training_methods": self.training_methods,
@@ -416,17 +431,19 @@ class LegacyOnnxRuntimeModel:
         router = self._session("router", self.router_path)
         router_logits = self._run(router, inputs)
         router_probabilities = [_softmax(logits) for logits in router_logits]
-        predicted_categories = [
+        predicted_routes = [
             self.category_classes[int(np.argmax(values))]
             for values in router_probabilities
         ]
 
         required = {category: set() for category in CATEGORIES}
         for index, (predicted, truth) in enumerate(
-            zip(predicted_categories, truth_categories)
+            zip(predicted_routes, truth_categories)
         ):
-            required[predicted].add(index)
-            required[truth].add(index)
+            if predicted in CATEGORIES:
+                required[predicted].add(index)
+            if truth in CATEGORIES:
+                required[truth].add(index)
 
         expert_outputs = {}
         for category, indexes in required.items():
@@ -445,27 +462,49 @@ class LegacyOnnxRuntimeModel:
 
         results = []
         for index, (predicted, truth, category_values) in enumerate(
-            zip(predicted_categories, truth_categories, router_probabilities)
+            zip(predicted_routes, truth_categories, router_probabilities)
         ):
-            category_index = self.category_classes.index(predicted)
-            pipeline = {
-                "category": predicted,
-                "category_label": CATEGORY_LABELS[predicted],
-                "category_confidence": round(
-                    float(category_values[category_index]), 4
-                ),
-                "category_probabilities": {
-                    name: round(float(category_values[position]), 4)
-                    for position, name in enumerate(self.category_classes)
-                },
-                **expert_outputs[(predicted, index)],
+            route_index = self.category_classes.index(predicted)
+            route_probabilities = {
+                name: round(float(category_values[position]), 4)
+                for position, name in enumerate(self.category_classes)
             }
-            oracle = {
-                "category": truth,
-                "category_label": CATEGORY_LABELS[truth],
-                **expert_outputs[(truth, index)],
+            food_status = predicted if predicted in FOOD_STATUS_CLASSES[1:] else "SUPPORTED"
+            food_probabilities = {
+                "SUPPORTED": round(sum(
+                    route_probabilities.get(name, 0.0) for name in CATEGORIES
+                ), 4),
+                "UNSUPPORTED": route_probabilities.get("UNSUPPORTED", 0.0),
+                "NON_FOOD": route_probabilities.get("NON_FOOD", 0.0),
             }
-            results.append({"pipeline": pipeline, "oracle": oracle})
+            pipeline = None
+            if predicted in CATEGORIES:
+                pipeline = {
+                    "category": predicted,
+                    "category_label": CATEGORY_LABELS[predicted],
+                    "category_confidence": round(
+                        float(category_values[route_index]), 4
+                    ),
+                    "category_probabilities": route_probabilities,
+                    **expert_outputs[(predicted, index)],
+                }
+            oracle = None
+            if truth in CATEGORIES:
+                oracle = {
+                    "category": truth,
+                    "category_label": CATEGORY_LABELS[truth],
+                    **expert_outputs[(truth, index)],
+                }
+            results.append({
+                "food_status": food_status,
+                "food_confidence": food_probabilities[food_status],
+                "food_probabilities": food_probabilities,
+                "router_label": predicted,
+                "router_confidence": round(float(category_values[route_index]), 4),
+                "router_probabilities": route_probabilities,
+                "pipeline": pipeline,
+                "oracle": oracle,
+            })
         return results
 
     def _decode_freshness(self, category, logits):
@@ -819,24 +858,47 @@ class LocalEvaluationApp:
     @staticmethod
     def _score_legacy_prediction(bundle, path, sample):
         descriptor = bundle.descriptor()
-        if sample["food_status"] != "SUPPORTED":
+        if sample["food_status"] != "SUPPORTED" and not bundle.food_gate_ready:
             return {
                 "ready": False, "applicable": False, "bundle": descriptor,
-                "error": "Legacy không có food gate nên không chấm ảnh negative",
+                "error": "Router Legacy 5 lớp cũ không chấm được ảnh negative",
             }
         if not bundle.ready:
             return {"ready": False, "applicable": True, "bundle": descriptor, "error": bundle.error}
         legacy = bundle.predict_batch([path], [sample["category"]])[0]
         pipeline = legacy["pipeline"]
         oracle = legacy["oracle"]
-        pipeline["correct"] = {
-            "category": pipeline["category"] == sample["category"],
-            "freshness": pipeline["freshness"] == sample["freshness"],
-        }
-        pipeline["correct"]["joint"] = all(pipeline["correct"].values())
-        oracle["correct"] = {"freshness": oracle["freshness"] == sample["freshness"]}
+        food_correct = (
+            legacy["food_status"] == sample["food_status"]
+            if bundle.food_gate_ready else None
+        )
+        if pipeline is not None and sample["food_status"] == "SUPPORTED":
+            pipeline["correct"] = {
+                "category": pipeline["category"] == sample["category"],
+                "freshness": pipeline["freshness"] == sample["freshness"],
+            }
+            pipeline["correct"]["joint"] = (
+                all(pipeline["correct"].values())
+                and (food_correct is not False)
+            )
+        if oracle is not None:
+            oracle["correct"] = {
+                "freshness": oracle["freshness"] == sample["freshness"]
+            }
+        joint_correct = (
+            bool(food_correct)
+            if sample["food_status"] != "SUPPORTED"
+            else bool(pipeline and pipeline["correct"]["joint"])
+        )
         return {
             "ready": True, "applicable": True, "bundle": descriptor,
+            "food_status": legacy["food_status"],
+            "food_confidence": legacy["food_confidence"],
+            "food_probabilities": legacy["food_probabilities"],
+            "food_correct": food_correct,
+            "router_label": legacy["router_label"],
+            "router_probabilities": legacy["router_probabilities"],
+            "joint_correct": joint_correct,
             "pipeline": pipeline, "oracle": oracle,
         }
 
@@ -915,8 +977,14 @@ class LocalEvaluationApp:
             unified_model_ids, legacy_bundle_ids,
         )
         supported_total = sum(sample["food_status"] == "SUPPORTED" for sample in selected)
-        if model_mode == "legacy" and not supported_total:
-            raise ValueError("Legacy không có food gate nên không thể chấm ảnh negative")
+        if (
+            model_mode == "legacy"
+            and not supported_total
+            and not any(bundle.food_gate_ready for bundle in legacy)
+        ):
+            raise ValueError(
+                "Các router Legacy được chọn vẫn là bản 5 lớp và không chấm được ảnh negative"
+            )
 
         unified_stats = {
             model.model_id: {
@@ -925,7 +993,13 @@ class LocalEvaluationApp:
             }
             for model in unified
         }
-        legacy_stats = {bundle.bundle_id: Counter() for bundle in legacy}
+        legacy_stats = {
+            bundle.bundle_id: {
+                "counts": Counter(), "truth": Counter(),
+                "correct": Counter(), "confusion": Counter(),
+            }
+            for bundle in legacy
+        }
         csv_path, summary_path = self._report_paths()
         try:
             with csv_path.open("w", encoding="utf-8-sig", newline="") as stream:
@@ -1003,10 +1077,17 @@ class LocalEvaluationApp:
                             self._model_row(
                                 sample, "legacy", bundle.bundle_id, bundle.display_name,
                                 bundle.router_architecture,
-                                bundle.ready and sample["food_status"] == "SUPPORTED",
-                                sample["food_status"] == "SUPPORTED",
-                                bundle.error if sample["food_status"] == "SUPPORTED" else
-                                "Legacy không áp dụng cho ảnh negative",
+                                bundle.ready and (
+                                    sample["food_status"] == "SUPPORTED"
+                                    or bundle.food_gate_ready
+                                ),
+                                sample["food_status"] == "SUPPORTED"
+                                or bundle.food_gate_ready,
+                                bundle.error or (
+                                    "Router Legacy 5 lớp cũ không chấm được ảnh negative"
+                                    if sample["food_status"] != "SUPPORTED"
+                                    and not bundle.food_gate_ready else ""
+                                ),
                             )
                             for sample in batch
                         ]
@@ -1019,54 +1100,92 @@ class LocalEvaluationApp:
                                     bundle.expert_architectures, ensure_ascii=False, sort_keys=True
                                 ),
                             })
-                        supported_indexes = [
+                        applicable_indexes = [
                             index for index, sample in enumerate(batch)
                             if sample["food_status"] == "SUPPORTED"
+                            or bundle.food_gate_ready
                         ]
-                        if bundle.ready and supported_indexes:
+                        if bundle.ready and applicable_indexes:
                             outputs = bundle.predict_batch(
-                                [paths[index] for index in supported_indexes],
-                                [batch[index]["category"] for index in supported_indexes],
+                                [paths[index] for index in applicable_indexes],
+                                [batch[index]["category"] for index in applicable_indexes],
                             )
                             stats = legacy_stats[bundle.bundle_id]
-                            for index, output in zip(supported_indexes, outputs):
+                            for index, output in zip(applicable_indexes, outputs):
                                 sample = batch[index]
                                 row = rows[index]
                                 pipeline = output["pipeline"]
                                 oracle = output["oracle"]
-                                category_correct = pipeline["category"] == sample["category"]
-                                freshness_correct = pipeline["freshness"] == sample["freshness"]
-                                oracle_correct = oracle["freshness"] == sample["freshness"]
-                                joint_correct = category_correct and freshness_correct
-                                stats["category"] += category_correct
-                                stats["freshness"] += freshness_correct
-                                stats["joint"] += joint_correct
-                                stats["oracle"] += oracle_correct
+                                is_supported = sample["food_status"] == "SUPPORTED"
+                                food_correct = None
+                                if bundle.food_gate_ready:
+                                    truth_status = sample["food_status"]
+                                    predicted_status = output["food_status"]
+                                    food_correct = predicted_status == truth_status
+                                    stats["counts"]["food"] += food_correct
+                                    stats["truth"][truth_status] += 1
+                                    stats["correct"][truth_status] += food_correct
+                                    stats["confusion"][(truth_status, predicted_status)] += 1
+                                category_correct = None
+                                freshness_correct = None
+                                oracle_correct = None
+                                if is_supported:
+                                    category_correct = bool(
+                                        pipeline
+                                        and pipeline["category"] == sample["category"]
+                                    )
+                                    freshness_correct = bool(
+                                        pipeline
+                                        and pipeline["freshness"] == sample["freshness"]
+                                    )
+                                    oracle_correct = (
+                                        oracle["freshness"] == sample["freshness"]
+                                    )
+                                    stats["counts"]["category"] += category_correct
+                                    stats["counts"]["freshness"] += freshness_correct
+                                    stats["counts"]["oracle"] += oracle_correct
+                                    joint_correct = category_correct and freshness_correct
+                                    if food_correct is not None:
+                                        joint_correct = joint_correct and food_correct
+                                else:
+                                    joint_correct = bool(food_correct)
+                                stats["counts"]["joint"] += joint_correct
                                 row.update({
                                     "evaluation_available": True,
                                     "legacy_available": True,
-                                    "legacy_router_category": pipeline["category"],
-                                    "legacy_router_confidence": pipeline["category_confidence"],
-                                    "legacy_pipeline_freshness": pipeline["freshness"],
-                                    "legacy_pipeline_freshness_confidence": pipeline["freshness_confidence"],
-                                    "legacy_pipeline_score": pipeline["estimated_freshness_score"],
-                                    "legacy_pipeline_expert_classes": pipeline["class_count"],
+                                    "legacy_food_status": output["food_status"],
+                                    "legacy_food_confidence": output["food_confidence"],
+                                    "legacy_food_correct": food_correct,
+                                    "legacy_router_category": output["router_label"],
+                                    "legacy_router_confidence": output["router_confidence"],
                                     "legacy_category_correct": category_correct,
                                     "legacy_freshness_correct": freshness_correct,
                                     "legacy_joint_correct": joint_correct,
-                                    "legacy_oracle_category": oracle["category"],
-                                    "legacy_oracle_freshness": oracle["freshness"],
-                                    "legacy_oracle_confidence": oracle["freshness_confidence"],
-                                    "legacy_oracle_score": oracle["estimated_freshness_score"],
-                                    "legacy_oracle_expert_classes": oracle["class_count"],
                                     "legacy_oracle_correct": oracle_correct,
                                 })
-                                for name, value in pipeline["category_probabilities"].items():
+                                for name, value in output["router_probabilities"].items():
                                     row[f"legacy_router_probability_{name}"] = value
-                                for name, value in pipeline["freshness_probabilities"].items():
-                                    row[f"legacy_pipeline_probability_{name}"] = value
-                                for name, value in oracle["freshness_probabilities"].items():
-                                    row[f"legacy_oracle_probability_{name}"] = value
+                                for name, value in output["food_probabilities"].items():
+                                    row[f"legacy_food_probability_{name}"] = value
+                                if pipeline is not None:
+                                    row.update({
+                                        "legacy_pipeline_freshness": pipeline["freshness"],
+                                        "legacy_pipeline_freshness_confidence": pipeline["freshness_confidence"],
+                                        "legacy_pipeline_score": pipeline["estimated_freshness_score"],
+                                        "legacy_pipeline_expert_classes": pipeline["class_count"],
+                                    })
+                                    for name, value in pipeline["freshness_probabilities"].items():
+                                        row[f"legacy_pipeline_probability_{name}"] = value
+                                if oracle is not None:
+                                    row.update({
+                                        "legacy_oracle_category": oracle["category"],
+                                        "legacy_oracle_freshness": oracle["freshness"],
+                                        "legacy_oracle_confidence": oracle["freshness_confidence"],
+                                        "legacy_oracle_score": oracle["estimated_freshness_score"],
+                                        "legacy_oracle_expert_classes": oracle["class_count"],
+                                    })
+                                    for name, value in oracle["freshness_probabilities"].items():
+                                        row[f"legacy_oracle_probability_{name}"] = value
                         writer.writerows(rows)
         except Exception:
             csv_path.unlink(missing_ok=True)
@@ -1103,18 +1222,45 @@ class LocalEvaluationApp:
         legacy_results = []
         for bundle in legacy:
             metrics = None
-            if bundle.ready and supported_total:
+            applicable_total = total if bundle.food_gate_ready else supported_total
+            if bundle.ready and applicable_total:
                 stats = legacy_stats[bundle.bundle_id]
                 metrics = {
-                    "pipeline_category_accuracy": stats["category"] / supported_total,
-                    "pipeline_freshness_accuracy": stats["freshness"] / supported_total,
-                    "pipeline_joint_accuracy": stats["joint"] / supported_total,
-                    "oracle_freshness_accuracy": stats["oracle"] / supported_total,
-                    "applicable_count": supported_total,
+                    "food_accuracy": (
+                        stats["counts"]["food"] / total
+                        if bundle.food_gate_ready else None
+                    ),
+                    "food_recall": {
+                        name: stats["correct"][name] / stats["truth"][name]
+                        if stats["truth"][name] else None
+                        for name in FOOD_STATUS_CLASSES
+                    },
+                    "food_confusion_matrix": [
+                        [stats["confusion"][(truth, predicted)] for predicted in FOOD_STATUS_CLASSES]
+                        for truth in FOOD_STATUS_CLASSES
+                    ],
+                    "pipeline_category_accuracy": (
+                        stats["counts"]["category"] / supported_total
+                        if supported_total else None
+                    ),
+                    "pipeline_freshness_accuracy": (
+                        stats["counts"]["freshness"] / supported_total
+                        if supported_total else None
+                    ),
+                    "pipeline_joint_accuracy": stats["counts"]["joint"] / applicable_total,
+                    "oracle_freshness_accuracy": (
+                        stats["counts"]["oracle"] / supported_total
+                        if supported_total else None
+                    ),
+                    "applicable_count": applicable_total,
+                    "supported_count": supported_total,
                 }
             legacy_results.append({
                 "ready": metrics is not None,
-                "error": bundle.error or (None if supported_total else "Legacy không áp dụng cho ảnh negative"),
+                "error": bundle.error or (
+                    None if applicable_total else
+                    "Router Legacy 5 lớp cũ không áp dụng cho ảnh negative"
+                ),
                 "bundle": bundle.descriptor(), "metrics": metrics,
             })
 

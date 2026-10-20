@@ -8,13 +8,15 @@
   ├─ Resize(232) → CenterCrop(224) → ImageNet normalization
   │
   ▼
-Router 5 lớp
+Router 7 lớp
   │
   ├─ cu ────────► expert cu: FRESH / SPOILED
   ├─ gia_cam ───► expert gia_cam: FRESH / HALF-FRESH / SPOILED
   ├─ gia_suc ───► expert gia_suc: FRESH / HALF-FRESH / SPOILED
   ├─ qua ───────► expert qua: FRESH / SPOILED
-  └─ rau ───────► expert rau: FRESH / SPOILED
+  ├─ rau ───────► expert rau: FRESH / SPOILED
+  ├─ UNSUPPORTED ─► dừng, không chạy expert
+  └─ NON_FOOD ────► dừng, không chạy expert
 ```
 
 Router và expert là các model độc lập. Expert nhận lại tensor ảnh, không nhận
@@ -95,7 +97,8 @@ category/freshness làm kết quả nghiệp vụ.
 
 ## Giới hạn hiện tại
 
-- Router dùng top-1 cứng; chưa có unknown/reject/fallback.
+- Router dùng top-1 cứng; hai lớp negative là cơ chế reject hiện tại nhưng
+  chưa có confidence threshold hoặc calibration.
 - Softmax confidence chưa được calibration.
 - Sai router kéo theo chọn sai expert.
 - pHash giảm duplicate leakage nhưng không thay thế group metadata thật.

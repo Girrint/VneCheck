@@ -8,6 +8,7 @@ from PIL import Image
 
 from food_ai.config import (
     CATEGORY_LABELS,
+    CATEGORIES,
     FRESHNESS_ANCHORS,
     FRESHNESS_LABELS,
     ROUTER_MODEL,
@@ -40,6 +41,26 @@ def predict(image_path):
     router, category_classes = load_checkpoint(ROUTER_MODEL, DEVICE)
     category_probs = predict_probabilities(router, category_classes, tensor)
     category = max(category_probs, key=category_probs.get)
+    food_status_probs = {
+        "SUPPORTED": sum(category_probs.get(name, 0.0) for name in CATEGORIES),
+        "UNSUPPORTED": category_probs.get("UNSUPPORTED", 0.0),
+        "NON_FOOD": category_probs.get("NON_FOOD", 0.0),
+    }
+
+    if category not in CATEGORIES:
+        return {
+            "food_status": category,
+            "food_status_confidence": round(food_status_probs[category], 4),
+            "food_status_probabilities": {
+                name: round(value, 4)
+                for name, value in food_status_probs.items()
+            },
+            "router_probabilities": {
+                name: round(value, 4)
+                for name, value in category_probs.items()
+            },
+            "warning": "Ảnh bị router Legacy từ chối trước freshness expert.",
+        }
 
     expert_path = freshness_model(category)
     if not expert_path.exists():
@@ -56,6 +77,11 @@ def predict(image_path):
     )
 
     return {
+        "food_status": "SUPPORTED",
+        "food_status_confidence": round(food_status_probs["SUPPORTED"], 4),
+        "food_status_probabilities": {
+            name: round(value, 4) for name, value in food_status_probs.items()
+        },
         "category": category,
         "category_label": CATEGORY_LABELS[category],
         "category_confidence": round(category_probs[category], 4),
@@ -64,6 +90,9 @@ def predict(image_path):
         "freshness_confidence": round(freshness_probs[freshness], 4),
         "estimated_freshness_score": round(score, 2),
         "scale": 10,
+        "router_probabilities": {
+            name: round(value, 4) for name, value in category_probs.items()
+        },
         "warning": "Chỉ số ước tính từ hình ảnh, không thay thế kiểm nghiệm an toàn.",
     }
 
