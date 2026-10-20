@@ -276,13 +276,22 @@ class LocalWebNegativeTests(unittest.TestCase):
             predict_batch=lambda paths: predictions[:len(paths)],
         )
         app.unified_model = lambda model_id=None: app.model
+        app.default_unified_model_id = "test-model"
         app.legacy_model = SimpleNamespace(
             ready=False,
             error="disabled",
             bundle_id="disabled",
-            descriptor=lambda: {"id": "disabled"},
+            display_name="Disabled legacy",
+            router_architecture="test_router",
+            expert_architectures={},
+            descriptor=lambda: {
+                "id": "disabled",
+                "display_name": "Disabled legacy",
+                "router_architecture": "test_router",
+            },
         )
         app.legacy_bundle = lambda bundle_id=None: app.legacy_model
+        app.default_legacy_bundle_id = "disabled"
         app.resolve_sample_path = lambda path: Path(path)
 
         csv_path = MagicMock()
@@ -293,12 +302,58 @@ class LocalWebNegativeTests(unittest.TestCase):
         app._report_paths = lambda: (csv_path, summary_path)
         result = app.evaluate(None, None, None, 0, 42)
 
-        metrics = result["models"]["unified"]["metrics"]
+        metrics = result["models"]["unified"][0]["metrics"]
         self.assertAlmostEqual(metrics["food_accuracy"], 2 / 3)
         self.assertEqual(metrics["category_accuracy"], 1.0)
         self.assertEqual(metrics["freshness_accuracy"], 1.0)
         self.assertEqual(metrics["food_recall"]["NON_FOOD"], 0.0)
         self.assertEqual(metrics["supported_count"], 1)
+        self.assertEqual(result["sample_count"], 3)
+        self.assertEqual(result["result_count"], 6)
+
+    def test_multiple_model_ids_keep_order_and_remove_duplicates(self):
+        from types import SimpleNamespace
+
+        from local_web.server import LocalEvaluationApp
+
+        app = LocalEvaluationApp.__new__(LocalEvaluationApp)
+        app.default_unified_model_id = "u1"
+        app.default_legacy_bundle_id = "l1"
+        app.unified_models = {
+            name: SimpleNamespace(model_id=name) for name in ("u1", "u2")
+        }
+        app.legacy_models = {
+            name: SimpleNamespace(bundle_id=name) for name in ("l1", "l2")
+        }
+
+        unified, legacy = app.selected_models(
+            "both",
+            unified_model_ids=["u2", "u1", "u2"],
+            legacy_bundle_ids=["l2", "l1", "l2"],
+        )
+
+        self.assertEqual([model.model_id for model in unified], ["u2", "u1"])
+        self.assertEqual([bundle.bundle_id for bundle in legacy], ["l2", "l1"])
+
+    def test_model_id_string_is_treated_as_one_id(self):
+        from types import SimpleNamespace
+
+        from local_web.server import LocalEvaluationApp
+
+        app = LocalEvaluationApp.__new__(LocalEvaluationApp)
+        app.default_unified_model_id = "model-one"
+        app.default_legacy_bundle_id = "legacy-one"
+        app.unified_models = {
+            "model-one": SimpleNamespace(model_id="model-one")
+        }
+        app.legacy_models = {}
+
+        unified, legacy = app.selected_models(
+            "unified", unified_model_ids="model-one"
+        )
+
+        self.assertEqual([model.model_id for model in unified], ["model-one"])
+        self.assertEqual(legacy, [])
 
 
 class UnifiedExportTests(unittest.TestCase):

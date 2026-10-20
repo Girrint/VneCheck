@@ -54,6 +54,9 @@ MODEL_MODES = ("both", "unified", "legacy")
 REPORT_FIELDS = [
     "image_path", "truth_food_status", "truth_category", "truth_freshness",
     "truth_product",
+    "evaluation_model_type", "evaluation_model_id", "evaluation_model_name",
+    "evaluation_model_architecture", "evaluation_available",
+    "evaluation_applicable", "evaluation_error",
     "unified_available", "unified_model_id", "unified_model_name",
     "unified_architecture", "unified_food_status", "unified_food_confidence",
     "unified_category", "unified_category_confidence", "unified_freshness",
@@ -754,76 +757,136 @@ class LocalEvaluationApp:
             },
         }
 
+    @staticmethod
+    def _unique_ids(values):
+        if values is None:
+            return []
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, (list, tuple)):
+            raise ValueError("Danh sách model phải là một JSON array")
+        return list(dict.fromkeys(str(value) for value in values if value))
+
+    def selected_models(
+        self,
+        model_mode,
+        unified_model_id=None,
+        legacy_bundle_id=None,
+        unified_model_ids=None,
+        legacy_bundle_ids=None,
+    ):
+        self.validate_model_mode(model_mode)
+        use_unified = model_mode in {"both", "unified"}
+        use_legacy = model_mode in {"both", "legacy"}
+        unified_ids = self._unique_ids(
+            unified_model_ids
+            if unified_model_ids is not None
+            else ([unified_model_id or self.default_unified_model_id] if use_unified else [])
+        ) if use_unified else []
+        legacy_ids = self._unique_ids(
+            legacy_bundle_ids
+            if legacy_bundle_ids is not None
+            else ([legacy_bundle_id or self.default_legacy_bundle_id] if use_legacy else [])
+        ) if use_legacy else []
+        unified = [self.unified_model(model_id) for model_id in unified_ids]
+        legacy = [self.legacy_bundle(bundle_id) for bundle_id in legacy_ids]
+        if not unified and not legacy:
+            raise ValueError("Hãy chọn ít nhất một ONNX model để đánh giá")
+        if model_mode == "unified" and not unified:
+            raise ValueError("Hãy chọn ít nhất một Unified ONNX model")
+        if model_mode == "legacy" and not legacy:
+            raise ValueError("Hãy chọn ít nhất một Legacy ONNX bundle")
+        return unified, legacy
+
+    @staticmethod
+    def _score_unified_prediction(model, path, sample):
+        if not model.ready:
+            return {"ready": False, "model": model.descriptor(), "error": model.error}
+        prediction = model.predict_batch([path])[0]
+        prediction["model"] = model.descriptor()
+        prediction["correct"] = {}
+        if prediction["food_gate_ready"]:
+            prediction["correct"]["food"] = prediction["food_status"] == sample["food_status"]
+        if sample["food_status"] == "SUPPORTED":
+            prediction["correct"].update({
+                "category": prediction["category"] == sample["category"],
+                "freshness": prediction["freshness"] == sample["freshness"],
+            })
+        evaluable = list(prediction["correct"].values())
+        prediction["correct"]["joint"] = bool(evaluable) and all(evaluable)
+        return {"ready": True, "model": model.descriptor(), "prediction": prediction}
+
+    @staticmethod
+    def _score_legacy_prediction(bundle, path, sample):
+        descriptor = bundle.descriptor()
+        if sample["food_status"] != "SUPPORTED":
+            return {
+                "ready": False, "applicable": False, "bundle": descriptor,
+                "error": "Legacy không có food gate nên không chấm ảnh negative",
+            }
+        if not bundle.ready:
+            return {"ready": False, "applicable": True, "bundle": descriptor, "error": bundle.error}
+        legacy = bundle.predict_batch([path], [sample["category"]])[0]
+        pipeline = legacy["pipeline"]
+        oracle = legacy["oracle"]
+        pipeline["correct"] = {
+            "category": pipeline["category"] == sample["category"],
+            "freshness": pipeline["freshness"] == sample["freshness"],
+        }
+        pipeline["correct"]["joint"] = all(pipeline["correct"].values())
+        oracle["correct"] = {"freshness": oracle["freshness"] == sample["freshness"]}
+        return {
+            "ready": True, "applicable": True, "bundle": descriptor,
+            "pipeline": pipeline, "oracle": oracle,
+        }
+
     def predict(
         self,
         relative_path,
         model_mode="both",
         unified_model_id=None,
         legacy_bundle_id=None,
+        unified_model_ids=None,
+        legacy_bundle_ids=None,
     ):
-        self.validate_model_mode(model_mode)
         sample = self.by_path.get(relative_path)
         path = self.resolve_sample_path(relative_path)
-        result = {"ground_truth": sample}
-        use_unified = model_mode in {"both", "unified"}
-        use_legacy = model_mode in {"both", "legacy"}
-        model = self.unified_model(unified_model_id) if use_unified else None
-        legacy_model = self.legacy_bundle(legacy_bundle_id) if use_legacy else None
-        if model is not None and model.ready:
-            prediction = model.predict_batch([path])[0]
-            prediction["model"] = model.descriptor()
-            prediction["correct"] = {}
-            if prediction["food_gate_ready"]:
-                prediction["correct"]["food"] = (
-                    prediction["food_status"] == sample["food_status"]
-                )
-            if sample["food_status"] == "SUPPORTED":
-                prediction["correct"].update({
-                    "category": prediction["category"] == sample["category"],
-                    "freshness": prediction["freshness"] == sample["freshness"],
-                })
-            evaluable = list(prediction["correct"].values())
-            prediction["correct"]["joint"] = bool(evaluable) and all(evaluable)
-            result["unified"] = {"ready": True, "prediction": prediction}
-        else:
-            result["unified"] = {
-                "ready": False,
-                "error": model.error if model is not None else "Unified không được chọn",
-            }
-
-        if legacy_model is not None and legacy_model.ready and sample["food_status"] == "SUPPORTED":
-            legacy = legacy_model.predict_batch(
-                [path], [sample["category"]]
-            )[0]
-            pipeline = legacy["pipeline"]
-            oracle = legacy["oracle"]
-            pipeline["correct"] = {
-                "category": pipeline["category"] == sample["category"],
-                "freshness": pipeline["freshness"] == sample["freshness"],
-            }
-            pipeline["correct"]["joint"] = all(
-                pipeline["correct"].values()
-            )
-            oracle["correct"] = {
-                "freshness": oracle["freshness"] == sample["freshness"]
-            }
-            result["legacy"] = {
-                "ready": True,
-                "bundle": legacy_model.descriptor(),
-                "pipeline": pipeline,
-                "oracle": oracle,
-            }
-        else:
-            result["legacy"] = {
-                "ready": False,
-                "applicable": sample["food_status"] == "SUPPORTED",
-                "error": (
-                    (legacy_model.error if legacy_model is not None else "Legacy không được chọn")
-                    if sample["food_status"] == "SUPPORTED"
-                    else "Legacy không có food gate nên không chấm ảnh negative"
-                ),
-            }
+        unified, legacy = self.selected_models(
+            model_mode, unified_model_id, legacy_bundle_id,
+            unified_model_ids, legacy_bundle_ids,
+        )
+        unified_results = [
+            self._score_unified_prediction(model, path, sample) for model in unified
+        ]
+        legacy_results = [
+            self._score_legacy_prediction(bundle, path, sample) for bundle in legacy
+        ]
+        result = {
+            "ground_truth": sample,
+            "unified_models": unified_results,
+            "legacy_models": legacy_results,
+        }
+        result["unified"] = unified_results[0] if unified_results else {
+            "ready": False, "error": "Unified không được chọn"
+        }
+        result["legacy"] = legacy_results[0] if legacy_results else {
+            "ready": False, "error": "Legacy không được chọn"
+        }
         return result
+
+    @staticmethod
+    def _model_row(sample, model_type, model_id, name, architecture, ready, applicable=True, error=None):
+        row = LocalEvaluationApp._base_report_row(sample)
+        row.update({
+            "evaluation_model_type": model_type,
+            "evaluation_model_id": model_id,
+            "evaluation_model_name": name,
+            "evaluation_model_architecture": architecture,
+            "evaluation_available": ready,
+            "evaluation_applicable": applicable,
+            "evaluation_error": error or "",
+        })
+        return row
 
     def evaluate(
         self,
@@ -835,31 +898,34 @@ class LocalEvaluationApp:
         model_mode="both",
         unified_model_id=None,
         legacy_bundle_id=None,
+        unified_model_ids=None,
+        legacy_bundle_ids=None,
     ):
-        self.validate_model_mode(model_mode)
         candidates = self.filter_samples(food_status, category, freshness)
         if not candidates:
             raise ValueError("Không có ảnh test phù hợp bộ lọc")
         requested = int(limit)
-        if requested <= 0 or requested >= len(candidates):
-            selected = list(candidates)
-        else:
-            selected = random.Random(seed).sample(candidates, requested)
-
-        unified_counts = Counter()
-        legacy_counts = Counter()
-        food_truth_counts = Counter()
-        food_correct_counts = Counter()
-        food_confusion = Counter()
-        supported_total = sum(
-            sample["food_status"] == "SUPPORTED" for sample in selected
+        selected = (
+            list(candidates)
+            if requested <= 0 or requested >= len(candidates)
+            else random.Random(seed).sample(candidates, requested)
         )
-        use_unified = model_mode in {"both", "unified"}
-        use_legacy = model_mode in {"both", "legacy"}
-        model = self.unified_model(unified_model_id) if use_unified else None
-        legacy_model = self.legacy_bundle(legacy_bundle_id) if use_legacy else None
-        if use_legacy and not use_unified and not supported_total:
+        unified, legacy = self.selected_models(
+            model_mode, unified_model_id, legacy_bundle_id,
+            unified_model_ids, legacy_bundle_ids,
+        )
+        supported_total = sum(sample["food_status"] == "SUPPORTED" for sample in selected)
+        if model_mode == "legacy" and not supported_total:
             raise ValueError("Legacy không có food gate nên không thể chấm ảnh negative")
+
+        unified_stats = {
+            model.model_id: {
+                "counts": Counter(), "truth": Counter(),
+                "correct": Counter(), "confusion": Counter(),
+            }
+            for model in unified
+        }
+        legacy_stats = {bundle.bundle_id: Counter() for bundle in legacy}
         csv_path, summary_path = self._report_paths()
         try:
             with csv_path.open("w", encoding="utf-8-sig", newline="") as stream:
@@ -868,221 +934,206 @@ class LocalEvaluationApp:
                 batch_size = 32
                 for start in range(0, len(selected), batch_size):
                     batch = selected[start:start + batch_size]
-                    paths = [
-                        self.resolve_sample_path(sample["path"])
-                        for sample in batch
-                    ]
-                    rows = [self._base_report_row(sample) for sample in batch]
-                    if model is not None and model.ready:
-                        outputs = model.predict_batch(paths)
-                        for sample, output, row in zip(batch, outputs, rows):
-                            is_supported = sample["food_status"] == "SUPPORTED"
-                            category_correct = None
-                            freshness_correct = None
-                            if is_supported:
-                                category_correct = (
-                                    output["category"] == sample["category"]
-                                )
-                                freshness_correct = (
-                                    output["freshness"] == sample["freshness"]
-                                )
-                                unified_counts["category"] += category_correct
-                                unified_counts["freshness"] += freshness_correct
+                    paths = [self.resolve_sample_path(sample["path"]) for sample in batch]
 
-                            food_correct = None
-                            if output["food_gate_ready"]:
-                                truth_status = sample["food_status"]
-                                predicted_status = output["food_status"]
-                                food_correct = predicted_status == truth_status
-                                unified_counts["food"] += food_correct
-                                food_truth_counts[truth_status] += 1
-                                food_correct_counts[truth_status] += food_correct
-                                food_confusion[(truth_status, predicted_status)] += 1
-
-                            if is_supported:
-                                joint_correct = category_correct and freshness_correct
-                                if food_correct is not None:
+                    for model in unified:
+                        rows = [
+                            self._model_row(
+                                sample, "unified", model.model_id, model.display_name,
+                                model.architecture, model.ready, True, model.error,
+                            )
+                            for sample in batch
+                        ]
+                        if model.ready:
+                            stats = unified_stats[model.model_id]
+                            outputs = model.predict_batch(paths)
+                            for sample, output, row in zip(batch, outputs, rows):
+                                is_supported = sample["food_status"] == "SUPPORTED"
+                                category_correct = None
+                                freshness_correct = None
+                                if is_supported:
+                                    category_correct = output["category"] == sample["category"]
+                                    freshness_correct = output["freshness"] == sample["freshness"]
+                                    stats["counts"]["category"] += category_correct
+                                    stats["counts"]["freshness"] += freshness_correct
+                                food_correct = None
+                                if output["food_gate_ready"]:
+                                    truth_status = sample["food_status"]
+                                    predicted_status = output["food_status"]
+                                    food_correct = predicted_status == truth_status
+                                    stats["counts"]["food"] += food_correct
+                                    stats["truth"][truth_status] += 1
+                                    stats["correct"][truth_status] += food_correct
+                                    stats["confusion"][(truth_status, predicted_status)] += 1
+                                joint_correct = (
+                                    category_correct and freshness_correct
+                                    if is_supported else bool(food_correct)
+                                )
+                                if is_supported and food_correct is not None:
                                     joint_correct = joint_correct and food_correct
-                            else:
-                                joint_correct = bool(food_correct)
-                            unified_counts["joint"] += joint_correct
+                                stats["counts"]["joint"] += joint_correct
+                                row.update({
+                                    "evaluation_available": True,
+                                    "unified_available": True,
+                                    "unified_model_id": model.model_id,
+                                    "unified_model_name": model.display_name,
+                                    "unified_architecture": model.architecture,
+                                    "unified_food_status": output["food_status"],
+                                    "unified_food_confidence": output["food_confidence"],
+                                    "unified_category": output["category"],
+                                    "unified_category_confidence": output["category_confidence"],
+                                    "unified_freshness": output["freshness"],
+                                    "unified_freshness_confidence": output["freshness_confidence"],
+                                    "unified_score": output["estimated_freshness_score"],
+                                    "unified_food_correct": food_correct,
+                                    "unified_category_correct": category_correct,
+                                    "unified_freshness_correct": freshness_correct,
+                                    "unified_joint_correct": joint_correct,
+                                })
+                                for name, value in output["probabilities"]["food"].items():
+                                    row[f"unified_food_probability_{name}"] = value
+                                for name, value in output["probabilities"]["category"].items():
+                                    row[f"unified_category_probability_{name}"] = value
+                                for name, value in output["probabilities"]["freshness"].items():
+                                    row[f"unified_freshness_probability_{name}"] = value
+                        writer.writerows(rows)
+
+                    for bundle in legacy:
+                        rows = [
+                            self._model_row(
+                                sample, "legacy", bundle.bundle_id, bundle.display_name,
+                                bundle.router_architecture,
+                                bundle.ready and sample["food_status"] == "SUPPORTED",
+                                sample["food_status"] == "SUPPORTED",
+                                bundle.error if sample["food_status"] == "SUPPORTED" else
+                                "Legacy không áp dụng cho ảnh negative",
+                            )
+                            for sample in batch
+                        ]
+                        for row in rows:
                             row.update({
-                                "unified_available": True,
-                                "unified_model_id": model.model_id,
-                                "unified_model_name": model.display_name,
-                                "unified_architecture": model.architecture,
-                                "unified_food_status": output["food_status"],
-                                "unified_food_confidence": output["food_confidence"],
-                                "unified_category": output["category"],
-                                "unified_category_confidence": output["category_confidence"],
-                                "unified_freshness": output["freshness"],
-                                "unified_freshness_confidence": output["freshness_confidence"],
-                                "unified_score": output["estimated_freshness_score"],
-                                "unified_food_correct": food_correct,
-                                "unified_category_correct": category_correct,
-                                "unified_freshness_correct": freshness_correct,
-                                "unified_joint_correct": joint_correct,
+                                "legacy_bundle_id": bundle.bundle_id,
+                                "legacy_bundle_name": bundle.display_name,
+                                "legacy_router_architecture": bundle.router_architecture,
+                                "legacy_expert_architectures": json.dumps(
+                                    bundle.expert_architectures, ensure_ascii=False, sort_keys=True
+                                ),
                             })
-                            for name, value in output["probabilities"]["food"].items():
-                                row[f"unified_food_probability_{name}"] = value
-                            for name, value in output["probabilities"]["category"].items():
-                                row[f"unified_category_probability_{name}"] = value
-                            for name, value in output["probabilities"]["freshness"].items():
-                                row[f"unified_freshness_probability_{name}"] = value
-                    if legacy_model is not None and legacy_model.ready:
-                        supported_items = [
-                            (sample, path, row)
-                            for sample, path, row in zip(batch, paths, rows)
+                        supported_indexes = [
+                            index for index, sample in enumerate(batch)
                             if sample["food_status"] == "SUPPORTED"
                         ]
-                        outputs = legacy_model.predict_batch(
-                            [item[1] for item in supported_items],
-                            [item[0]["category"] for item in supported_items],
-                        ) if supported_items else []
-                        for (sample, _, row), output in zip(supported_items, outputs):
-                            pipeline = output["pipeline"]
-                            oracle = output["oracle"]
-                            category_correct = (
-                                pipeline["category"] == sample["category"]
+                        if bundle.ready and supported_indexes:
+                            outputs = bundle.predict_batch(
+                                [paths[index] for index in supported_indexes],
+                                [batch[index]["category"] for index in supported_indexes],
                             )
-                            freshness_correct = (
-                                pipeline["freshness"] == sample["freshness"]
-                            )
-                            oracle_correct = (
-                                oracle["freshness"] == sample["freshness"]
-                            )
-                            joint_correct = category_correct and freshness_correct
-                            legacy_counts["category"] += category_correct
-                            legacy_counts["freshness"] += freshness_correct
-                            legacy_counts["joint"] += joint_correct
-                            legacy_counts["oracle"] += oracle_correct
-                            row.update({
-                                "legacy_available": True,
-                                "legacy_bundle_id": legacy_model.bundle_id,
-                                "legacy_bundle_name": legacy_model.display_name,
-                                "legacy_router_architecture": legacy_model.router_architecture,
-                                "legacy_expert_architectures": json.dumps(
-                                    legacy_model.expert_architectures,
-                                    ensure_ascii=False,
-                                    sort_keys=True,
-                                ),
-                                "legacy_router_category": pipeline["category"],
-                                "legacy_router_confidence": pipeline["category_confidence"],
-                                "legacy_pipeline_freshness": pipeline["freshness"],
-                                "legacy_pipeline_freshness_confidence": pipeline["freshness_confidence"],
-                                "legacy_pipeline_score": pipeline["estimated_freshness_score"],
-                                "legacy_pipeline_expert_classes": pipeline["class_count"],
-                                "legacy_category_correct": category_correct,
-                                "legacy_freshness_correct": freshness_correct,
-                                "legacy_joint_correct": joint_correct,
-                                "legacy_oracle_category": oracle["category"],
-                                "legacy_oracle_freshness": oracle["freshness"],
-                                "legacy_oracle_confidence": oracle["freshness_confidence"],
-                                "legacy_oracle_score": oracle["estimated_freshness_score"],
-                                "legacy_oracle_expert_classes": oracle["class_count"],
-                                "legacy_oracle_correct": oracle_correct,
-                            })
-                            for name, value in pipeline["category_probabilities"].items():
-                                row[f"legacy_router_probability_{name}"] = value
-                            for name, value in pipeline["freshness_probabilities"].items():
-                                row[f"legacy_pipeline_probability_{name}"] = value
-                            for name, value in oracle["freshness_probabilities"].items():
-                                row[f"legacy_oracle_probability_{name}"] = value
-                    writer.writerows(rows)
+                            stats = legacy_stats[bundle.bundle_id]
+                            for index, output in zip(supported_indexes, outputs):
+                                sample = batch[index]
+                                row = rows[index]
+                                pipeline = output["pipeline"]
+                                oracle = output["oracle"]
+                                category_correct = pipeline["category"] == sample["category"]
+                                freshness_correct = pipeline["freshness"] == sample["freshness"]
+                                oracle_correct = oracle["freshness"] == sample["freshness"]
+                                joint_correct = category_correct and freshness_correct
+                                stats["category"] += category_correct
+                                stats["freshness"] += freshness_correct
+                                stats["joint"] += joint_correct
+                                stats["oracle"] += oracle_correct
+                                row.update({
+                                    "evaluation_available": True,
+                                    "legacy_available": True,
+                                    "legacy_router_category": pipeline["category"],
+                                    "legacy_router_confidence": pipeline["category_confidence"],
+                                    "legacy_pipeline_freshness": pipeline["freshness"],
+                                    "legacy_pipeline_freshness_confidence": pipeline["freshness_confidence"],
+                                    "legacy_pipeline_score": pipeline["estimated_freshness_score"],
+                                    "legacy_pipeline_expert_classes": pipeline["class_count"],
+                                    "legacy_category_correct": category_correct,
+                                    "legacy_freshness_correct": freshness_correct,
+                                    "legacy_joint_correct": joint_correct,
+                                    "legacy_oracle_category": oracle["category"],
+                                    "legacy_oracle_freshness": oracle["freshness"],
+                                    "legacy_oracle_confidence": oracle["freshness_confidence"],
+                                    "legacy_oracle_score": oracle["estimated_freshness_score"],
+                                    "legacy_oracle_expert_classes": oracle["class_count"],
+                                    "legacy_oracle_correct": oracle_correct,
+                                })
+                                for name, value in pipeline["category_probabilities"].items():
+                                    row[f"legacy_router_probability_{name}"] = value
+                                for name, value in pipeline["freshness_probabilities"].items():
+                                    row[f"legacy_pipeline_probability_{name}"] = value
+                                for name, value in oracle["freshness_probabilities"].items():
+                                    row[f"legacy_oracle_probability_{name}"] = value
+                        writer.writerows(rows)
         except Exception:
             csv_path.unlink(missing_ok=True)
             summary_path.unlink(missing_ok=True)
             raise
+
         total = len(selected)
-        unified_metrics = None
-        if model is not None and model.ready:
-            food_accuracy = (
-                unified_counts["food"] / total
-                if model.food_gate_ready
-                else None
-            )
-            unified_metrics = {
-                "food_accuracy": food_accuracy,
-                "food_recall": {
-                    name: (
-                        food_correct_counts[name] / food_truth_counts[name]
-                        if food_truth_counts[name]
-                        else None
-                    )
-                    for name in FOOD_STATUS_CLASSES
-                },
-                "food_confusion_matrix": [
-                    [food_confusion[(truth, predicted)] for predicted in FOOD_STATUS_CLASSES]
-                    for truth in FOOD_STATUS_CLASSES
-                ],
-                "category_accuracy": (
-                    unified_counts["category"] / supported_total
-                    if supported_total else None
-                ),
-                "freshness_accuracy": (
-                    unified_counts["freshness"] / supported_total
-                    if supported_total else None
-                ),
-                "joint_accuracy": unified_counts["joint"] / total,
-                "supported_count": supported_total,
-            }
-        legacy_metrics = None
-        if legacy_model is not None and legacy_model.ready and supported_total:
-            legacy_metrics = {
-                "pipeline_category_accuracy": legacy_counts["category"] / supported_total,
-                "pipeline_freshness_accuracy": legacy_counts["freshness"] / supported_total,
-                "pipeline_joint_accuracy": legacy_counts["joint"] / supported_total,
-                "oracle_freshness_accuracy": legacy_counts["oracle"] / supported_total,
-                "applicable_count": supported_total,
-            }
+        unified_results = []
+        for model in unified:
+            metrics = None
+            if model.ready:
+                stats = unified_stats[model.model_id]
+                metrics = {
+                    "food_accuracy": stats["counts"]["food"] / total if model.food_gate_ready else None,
+                    "food_recall": {
+                        name: stats["correct"][name] / stats["truth"][name]
+                        if stats["truth"][name] else None
+                        for name in FOOD_STATUS_CLASSES
+                    },
+                    "food_confusion_matrix": [
+                        [stats["confusion"][(truth, predicted)] for predicted in FOOD_STATUS_CLASSES]
+                        for truth in FOOD_STATUS_CLASSES
+                    ],
+                    "category_accuracy": stats["counts"]["category"] / supported_total if supported_total else None,
+                    "freshness_accuracy": stats["counts"]["freshness"] / supported_total if supported_total else None,
+                    "joint_accuracy": stats["counts"]["joint"] / total,
+                    "supported_count": supported_total,
+                }
+            unified_results.append({
+                "ready": metrics is not None, "error": model.error,
+                "model": model.descriptor(), "metrics": metrics,
+            })
+
+        legacy_results = []
+        for bundle in legacy:
+            metrics = None
+            if bundle.ready and supported_total:
+                stats = legacy_stats[bundle.bundle_id]
+                metrics = {
+                    "pipeline_category_accuracy": stats["category"] / supported_total,
+                    "pipeline_freshness_accuracy": stats["freshness"] / supported_total,
+                    "pipeline_joint_accuracy": stats["joint"] / supported_total,
+                    "oracle_freshness_accuracy": stats["oracle"] / supported_total,
+                    "applicable_count": supported_total,
+                }
+            legacy_results.append({
+                "ready": metrics is not None,
+                "error": bundle.error or (None if supported_total else "Legacy không áp dụng cho ảnh negative"),
+                "bundle": bundle.descriptor(), "metrics": metrics,
+            })
+
         result = {
             "sample_count": total,
+            "result_count": total * (len(unified) + len(legacy)),
             "candidate_count": len(candidates),
             "evaluated_all": total == len(candidates),
             "filters": {
                 "model_mode": model_mode,
-                "unified_model_id": model.model_id if model is not None else None,
-                "legacy_bundle_id": (
-                    legacy_model.bundle_id if legacy_model is not None else None
-                ),
-                "seed": seed,
-                "food_status": food_status,
-                "category": category,
-                "freshness": freshness,
+                "unified_model_ids": [model.model_id for model in unified],
+                "legacy_bundle_ids": [bundle.bundle_id for bundle in legacy],
+                "seed": seed, "food_status": food_status,
+                "category": category, "freshness": freshness,
             },
-            "models": {
-                "unified": {
-                    "ready": unified_metrics is not None,
-                    "error": model.error if model is not None else "Unified không được chọn",
-                    "model": model.descriptor() if model is not None else None,
-                    "metrics": unified_metrics,
-                },
-                "legacy": {
-                    "ready": legacy_metrics is not None,
-                    "error": (
-                        (legacy_model.error if legacy_model is not None else "Legacy không được chọn")
-                        if not (legacy_model is not None and legacy_model.ready)
-                        else (
-                            None if supported_total
-                            else "Legacy không áp dụng cho ảnh negative"
-                        )
-                    ),
-                    "bundle": (
-                        legacy_model.descriptor()
-                        if legacy_model is not None else None
-                    ),
-                    "metrics": legacy_metrics,
-                },
-            },
+            "models": {"unified": unified_results, "legacy": legacy_results},
             "reports": {
-                "csv": {
-                    "filename": csv_path.name,
-                    "url": f"/api/report?file={csv_path.name}",
-                },
-                "summary_json": {
-                    "filename": summary_path.name,
-                    "url": f"/api/report?file={summary_path.name}",
-                },
+                "csv": {"filename": csv_path.name, "url": f"/api/report?file={csv_path.name}"},
+                "summary_json": {"filename": summary_path.name, "url": f"/api/report?file={summary_path.name}"},
             },
         }
         summary_path.write_text(
@@ -1207,6 +1258,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     payload.get("model_mode", "both"),
                     payload.get("unified_model_id") or None,
                     payload.get("legacy_bundle_id") or None,
+                    payload.get("unified_model_ids"),
+                    payload.get("legacy_bundle_ids"),
                 ))
                 return
             if parsed.path == "/api/evaluate":
@@ -1219,6 +1272,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     payload.get("model_mode", "both"),
                     payload.get("unified_model_id") or None,
                     payload.get("legacy_bundle_id") or None,
+                    payload.get("unified_model_ids"),
+                    payload.get("legacy_bundle_ids"),
                 ))
                 return
             self._error(HTTPStatus.NOT_FOUND, "API không tồn tại")

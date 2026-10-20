@@ -60,6 +60,38 @@ function labelFor(kind, value) {
   return items.find((item) => item.value === value)?.label || value || "—";
 }
 
+function selectedIds(containerId) {
+  return [...$(containerId).querySelectorAll('input[type="checkbox"]:checked:not(:disabled)')]
+    .map((input) => input.value);
+}
+
+function renderPicker(containerId, items, defaultId, type) {
+  const container = $(containerId);
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = `<small>Không tìm thấy ${type === "unified" ? "Unified ONNX" : "Legacy bundle"}.</small>`;
+    return;
+  }
+  const selectedId = items.some((item) => item.id === defaultId && item.ready)
+    ? defaultId
+    : items.find((item) => item.ready)?.id;
+  items.forEach((item) => {
+    const id = `${type}-${item.id}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const label = document.createElement("label");
+    label.className = `model-choice ${item.ready ? "" : "disabled"}`;
+    const architecture = type === "unified"
+      ? item.architecture
+      : `router ${item.router_architecture} · expert ${item.expert_architecture_summary}`;
+    label.innerHTML = `
+      <input id="${escapeHtml(id)}" type="checkbox" value="${escapeHtml(item.id)}"
+        data-invalid="${String(!item.ready)}"
+        ${item.id === selectedId ? "checked" : ""}
+        ${item.ready ? "" : "disabled"}>
+      <span>${escapeHtml(item.display_name)}<small>${escapeHtml(architecture || "unknown")}${item.ready ? "" : ` · ${escapeHtml(item.error || "lỗi")}`}</small></span>`;
+    container.append(label);
+  });
+}
+
 function probabilityBars(values) {
   const entries = Object.entries(values || {}).filter(([, value]) => value !== "" && value !== null && value !== undefined);
   if (!entries.length) return "";
@@ -76,14 +108,14 @@ function resultCard(data) {
   const truthCategory = labelFor("categories", data.truth.category);
   const truthFreshness = labelFor("freshness", data.truth.freshness);
   const isSupported = data.truth.food_status === "SUPPORTED";
-  const supportedPredictions = isSupported ? `
-        <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.unified.category))}</strong><span>${percent(data.unified.categoryConfidence)}</span></div>
-        <div class="prediction"><small>Freshness</small><strong>${escapeHtml(labelFor("freshness", data.unified.freshness))}</strong><span>${percent(data.unified.freshnessConfidence)}</span></div>
-        <div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.unified.score)}</strong><span>/ 10</span></div>` : "";
-  const supportedProbabilities = isSupported ? `
-        <div class="probability-group"><h4>Category probabilities</h4>${probabilityBars(data.unified.categoryProbabilities)}</div>
-        <div class="probability-group"><h4>Freshness probabilities</h4>${probabilityBars(data.unified.freshnessProbabilities)}</div>` : "";
-  const unified = data.unified?.available ? `
+  const supportedPredictions = isSupported && data.unified?.available ? `
+    <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.unified.category))}</strong><span>${percent(data.unified.categoryConfidence)}</span></div>
+    <div class="prediction"><small>Freshness</small><strong>${escapeHtml(labelFor("freshness", data.unified.freshness))}</strong><span>${percent(data.unified.freshnessConfidence)}</span></div>
+    <div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.unified.score)}</strong><span>/ 10</span></div>` : "";
+  const supportedProbabilities = isSupported && data.unified?.available ? `
+    <div class="probability-group"><h4>Category probabilities</h4>${probabilityBars(data.unified.categoryProbabilities)}</div>
+    <div class="probability-group"><h4>Freshness probabilities</h4>${probabilityBars(data.unified.freshnessProbabilities)}</div>` : "";
+  const unified = data.unified ? (data.unified.available ? `
     <article class="model-card">
       <div class="model-card-header"><strong>${escapeHtml(data.unified.modelName || "Unified")} · ${escapeHtml(data.unified.architecture || "ONNX")}</strong><span class="verdict ${data.unified.jointCorrect ? "" : "wrong"}">${data.unified.jointCorrect ? "Đúng" : "Sai"}</span></div>
       <div class="prediction-grid">
@@ -94,9 +126,9 @@ function resultCard(data) {
         <div class="probability-group"><h4>Food status probabilities</h4>${probabilityBars(data.unified.foodProbabilities)}</div>
         ${supportedProbabilities}
       </div>
-    </article>` : `<div class="model-missing">Unified ONNX chưa sẵn sàng.</div>`;
+    </article>` : `<div class="model-missing">${escapeHtml(data.unified.modelName || "Unified")}: ${escapeHtml(data.unified.error || "ONNX chưa sẵn sàng")}</div>`) : "";
 
-  const legacy = data.legacy?.available ? `
+  const legacy = data.legacy ? (data.legacy.available ? `
     <article class="model-card">
       <div class="model-card-header"><strong>${escapeHtml(data.legacy.bundleName || "Legacy")} · ${escapeHtml(data.legacy.routerArchitecture || "router")} → expert</strong><span class="verdict ${data.legacy.jointCorrect ? "" : "wrong"}">${data.legacy.jointCorrect ? "Đúng" : "Sai"}</span></div>
       <div class="prediction-grid">
@@ -108,12 +140,11 @@ function resultCard(data) {
         <div class="probability-group"><h4>Router probabilities</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
         <div class="probability-group"><h4>Pipeline expert probabilities</h4>${probabilityBars(data.legacy.freshnessProbabilities)}</div>
       </div>
-    </article>` : `<div class="model-missing">${data.legacy?.applicable === false ? "Legacy không có food gate nên không áp dụng cho ảnh negative." : "Legacy ONNX chưa sẵn sàng."}</div>`;
+    </article>` : `<div class="model-missing">${escapeHtml(data.legacy.bundleName || "Legacy")}: ${escapeHtml(data.legacy.error || (data.legacy.applicable === false ? "Không áp dụng cho ảnh negative" : "ONNX chưa sẵn sàng"))}</div>`) : "";
 
   const truthChips = isSupported
     ? `<span class="chip">${escapeHtml(truthCategory)}</span><span class="chip">${escapeHtml(truthFreshness)}</span><span class="chip">${escapeHtml(data.truth.product)}</span>`
     : "";
-
   return `<article class="image-result">
     <div class="sample-column">
       <img class="sample-image" loading="lazy" src="/api/image?path=${encodeURIComponent(data.path)}" alt="Ảnh test ${escapeHtml(data.path)}">
@@ -124,69 +155,90 @@ function resultCard(data) {
   </article>`;
 }
 
-function singleToCard(result) {
+function unifiedEntryToCard(sample, entry) {
+  const prediction = entry.prediction;
+  return {
+    path: sample.path,
+    truth: sample,
+    unified: prediction ? {
+      available: true,
+      modelName: entry.model?.display_name || prediction.model?.display_name,
+      architecture: entry.model?.architecture || prediction.model?.architecture,
+      foodStatus: prediction.food_status,
+      foodConfidence: prediction.food_confidence,
+      category: prediction.category,
+      categoryConfidence: prediction.category_confidence,
+      freshness: prediction.freshness,
+      freshnessConfidence: prediction.freshness_confidence,
+      score: prediction.estimated_freshness_score,
+      jointCorrect: prediction.correct.joint,
+      foodProbabilities: prediction.probabilities.food,
+      categoryProbabilities: prediction.probabilities.category,
+      freshnessProbabilities: prediction.probabilities.freshness,
+    } : {
+      available: false,
+      modelName: entry.model?.display_name,
+      error: entry.error,
+    },
+  };
+}
+
+function legacyEntryToCard(sample, entry) {
+  return {
+    path: sample.path,
+    truth: sample,
+    legacy: entry.ready ? {
+      available: true,
+      bundleName: entry.bundle?.display_name,
+      routerArchitecture: entry.bundle?.router_architecture,
+      category: entry.pipeline.category,
+      categoryConfidence: entry.pipeline.category_confidence,
+      freshness: entry.pipeline.freshness,
+      freshnessConfidence: entry.pipeline.freshness_confidence,
+      classCount: entry.pipeline.class_count,
+      jointCorrect: entry.pipeline.correct.joint,
+      oracleFreshness: entry.oracle.freshness,
+      oracleCorrect: entry.oracle.correct.freshness,
+      oracleClassCount: entry.oracle.class_count,
+      categoryProbabilities: entry.pipeline.category_probabilities,
+      freshnessProbabilities: entry.pipeline.freshness_probabilities,
+    } : {
+      available: false,
+      applicable: entry.applicable !== false,
+      bundleName: entry.bundle?.display_name,
+      error: entry.error,
+    },
+  };
+}
+
+function singleToCards(result) {
   const sample = result.ground_truth;
-  const unified = result.unified.ready ? {
-    available: true,
-    modelName: result.unified.prediction.model?.display_name,
-    architecture: result.unified.prediction.model?.architecture,
-    foodStatus: result.unified.prediction.food_status,
-    foodConfidence: result.unified.prediction.food_confidence,
-    category: result.unified.prediction.category,
-    categoryConfidence: result.unified.prediction.category_confidence,
-    freshness: result.unified.prediction.freshness,
-    freshnessConfidence: result.unified.prediction.freshness_confidence,
-    score: result.unified.prediction.estimated_freshness_score,
-    jointCorrect: result.unified.prediction.correct.joint,
-    foodProbabilities: result.unified.prediction.probabilities.food,
-    categoryProbabilities: result.unified.prediction.probabilities.category,
-    freshnessProbabilities: result.unified.prediction.probabilities.freshness,
-  } : { available: false };
-  const legacy = result.legacy.ready ? {
-    available: true,
-    bundleName: result.legacy.bundle?.display_name,
-    routerArchitecture: result.legacy.bundle?.router_architecture,
-    category: result.legacy.pipeline.category,
-    categoryConfidence: result.legacy.pipeline.category_confidence,
-    freshness: result.legacy.pipeline.freshness,
-    freshnessConfidence: result.legacy.pipeline.freshness_confidence,
-    classCount: result.legacy.pipeline.class_count,
-    jointCorrect: result.legacy.pipeline.correct.joint,
-    oracleFreshness: result.legacy.oracle.freshness,
-    oracleCorrect: result.legacy.oracle.correct.freshness,
-    oracleClassCount: result.legacy.oracle.class_count,
-    categoryProbabilities: result.legacy.pipeline.category_probabilities,
-    freshnessProbabilities: result.legacy.pipeline.freshness_probabilities,
-  } : { available: false, applicable: result.legacy.applicable !== false };
-  return { path: sample.path, truth: sample, unified, legacy };
+  return [
+    ...(result.unified_models || []).map((entry) => unifiedEntryToCard(sample, entry)),
+    ...(result.legacy_models || []).map((entry) => legacyEntryToCard(sample, entry)),
+  ];
 }
 
 function csvToCard(row) {
-  const collect = (prefix, names) => Object.fromEntries(names.map((name) => [name, row[`${prefix}${name}`]]).filter(([, value]) => value !== ""));
-  return {
+  const collect = (prefix, names) => Object.fromEntries(
+    names.map((name) => [name, row[`${prefix}${name}`]]).filter(([, value]) => value !== "")
+  );
+  const base = {
     path: row.image_path,
-    truth: { food_status: row.truth_food_status, category: row.truth_category, freshness: row.truth_freshness, product: row.truth_product },
-    unified: {
-      available: booleanValue(row.unified_available),
-      modelName: row.unified_model_name,
-      architecture: row.unified_architecture,
-      foodStatus: row.unified_food_status,
-      foodConfidence: row.unified_food_confidence,
-      category: row.unified_category,
-      categoryConfidence: row.unified_category_confidence,
-      freshness: row.unified_freshness,
-      freshnessConfidence: row.unified_freshness_confidence,
-      score: row.unified_score,
-      jointCorrect: booleanValue(row.unified_joint_correct),
-      foodProbabilities: collect("unified_food_probability_", ["SUPPORTED", "UNSUPPORTED", "NON_FOOD"]),
-      categoryProbabilities: collect("unified_category_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau"]),
-      freshnessProbabilities: collect("unified_freshness_probability_", ["FRESH", "HALF-FRESH", "SPOILED"]),
+    truth: {
+      food_status: row.truth_food_status,
+      category: row.truth_category,
+      freshness: row.truth_freshness,
+      product: row.truth_product,
     },
-    legacy: {
+  };
+  if (row.evaluation_model_type === "legacy" || row.legacy_bundle_id) {
+    base.legacy = {
       available: booleanValue(row.legacy_available),
-      applicable: row.truth_food_status === "SUPPORTED",
-      bundleName: row.legacy_bundle_name,
-      routerArchitecture: row.legacy_router_architecture,
+      applicable: booleanValue(row.evaluation_applicable),
+      bundleName: row.legacy_bundle_name || row.evaluation_model_name,
+      routerArchitecture: row.legacy_router_architecture || row.evaluation_model_architecture,
+      error: row.evaluation_error,
       category: row.legacy_router_category,
       categoryConfidence: row.legacy_router_confidence,
       freshness: row.legacy_pipeline_freshness,
@@ -198,8 +250,27 @@ function csvToCard(row) {
       oracleClassCount: row.legacy_oracle_expert_classes,
       categoryProbabilities: collect("legacy_router_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau"]),
       freshnessProbabilities: collect("legacy_pipeline_probability_", ["FRESH", "HALF-FRESH", "SPOILED"]),
-    },
-  };
+    };
+  } else {
+    base.unified = {
+      available: booleanValue(row.unified_available),
+      modelName: row.unified_model_name || row.evaluation_model_name,
+      architecture: row.unified_architecture || row.evaluation_model_architecture,
+      error: row.evaluation_error,
+      foodStatus: row.unified_food_status,
+      foodConfidence: row.unified_food_confidence,
+      category: row.unified_category,
+      categoryConfidence: row.unified_category_confidence,
+      freshness: row.unified_freshness,
+      freshnessConfidence: row.unified_freshness_confidence,
+      score: row.unified_score,
+      jointCorrect: booleanValue(row.unified_joint_correct),
+      foodProbabilities: collect("unified_food_probability_", ["SUPPORTED", "UNSUPPORTED", "NON_FOOD"]),
+      categoryProbabilities: collect("unified_category_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau"]),
+      freshnessProbabilities: collect("unified_freshness_probability_", ["FRESH", "HALF-FRESH", "SPOILED"]),
+    };
+  }
+  return base;
 }
 
 function showLoading(title, text) {
@@ -213,49 +284,27 @@ function showLoading(title, text) {
 
 function showCards(cards) {
   $("loadingState").classList.add("hidden");
-  $("emptyState").classList.add("hidden");
+  $("emptyState").classList.toggle("hidden", cards.length > 0);
   $("resultList").innerHTML = cards.map(resultCard).join("");
-  $("resultList").classList.remove("hidden");
+  $("resultList").classList.toggle("hidden", cards.length === 0);
 }
 
 async function loadStatus() {
   const status = await api("/api/status");
   state.status = status;
-  const unifiedSelect = $("unifiedModelFilter");
-  unifiedSelect.innerHTML = "";
-  status.unified_models.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.id;
-    const method = model.training_method ? ` · ${model.training_method}` : "";
-    option.textContent = `${model.display_name} · ${model.architecture}${method}${model.ready ? "" : " (lỗi)"}`;
-    option.disabled = !model.ready;
-    option.dataset.ready = String(model.ready);
-    unifiedSelect.append(option);
-  });
-  unifiedSelect.value = status.default_unified_model_id || "";
-  const legacySelect = $("legacyBundleFilter");
-  legacySelect.innerHTML = "";
-  status.legacy_bundles.forEach((bundle) => {
-    const option = document.createElement("option");
-    option.value = bundle.id;
-    const experts = bundle.expert_architecture_summary || "unknown";
-    option.textContent = `${bundle.display_name} · router ${bundle.router_architecture} · expert ${experts}${bundle.ready ? "" : " (lỗi)"}`;
-    option.disabled = !bundle.ready;
-    option.dataset.ready = String(bundle.ready);
-    legacySelect.append(option);
-  });
-  legacySelect.value = status.default_legacy_bundle_id || "";
+  renderPicker("unifiedModelFilter", status.unified_models, status.default_unified_model_id, "unified");
+  renderPicker("legacyBundleFilter", status.legacy_bundles, status.default_legacy_bundle_id, "legacy");
   fillSelect($("foodStatusFilter"), status.labels.food_statuses);
   fillSelect($("categoryFilter"), status.labels.categories);
   fillSelect($("freshnessFilter"), status.labels.freshness);
   $("datasetSummary").textContent = `${status.test_images.toLocaleString("vi-VN")} ảnh test đã lập chỉ mục`;
-  const anyReady = status.model_ready || status.legacy_ready;
+  const unifiedReady = status.unified_models.filter((model) => model.ready).length;
+  const legacyReady = status.legacy_bundles.filter((bundle) => bundle.ready).length;
+  const anyReady = unifiedReady + legacyReady > 0;
   const card = $("modelStatus");
   card.className = `status-card ${anyReady ? "ready" : "error"}`;
-  card.querySelector("strong").textContent = `${status.model_ready ? "Unified ✓" : "Unified —"} · ${status.legacy_ready ? "Legacy ✓" : "Legacy —"}`;
+  card.querySelector("strong").textContent = `${unifiedReady} Unified · ${legacyReady} Legacy`;
   card.querySelector("small").textContent = `${status.test_images.toLocaleString("vi-VN")} ảnh test · ONNX Runtime CPU`;
-  $("randomButton").disabled = !anyReady;
-  $("evaluateButton").disabled = !anyReady;
   syncControls();
 }
 
@@ -267,37 +316,46 @@ function syncControls() {
   }
   $("categoryFilter").disabled = negative;
   $("freshnessFilter").disabled = negative;
-
   const legacyOption = $("modelFilter").querySelector('option[value="legacy"]');
   const unifiedOption = $("modelFilter").querySelector('option[value="unified"]');
-  legacyOption.disabled = negative || state.status?.legacy_ready === false;
-  unifiedOption.disabled = !state.status?.unified_models?.some((model) => model.ready);
-  if (legacyOption.disabled && $("modelFilter").value === "legacy") {
-    $("modelFilter").value = "unified";
-  }
+  const unifiedReady = state.status?.unified_models?.some((model) => model.ready);
+  const legacyReady = state.status?.legacy_bundles?.some((bundle) => bundle.ready);
+  legacyOption.disabled = negative || !legacyReady;
+  unifiedOption.disabled = !unifiedReady;
+  if (legacyOption.disabled && $("modelFilter").value === "legacy") $("modelFilter").value = "unified";
 
   const mode = $("modelFilter").value;
-  const selectedModel = state.status?.unified_models?.find(
-    (model) => model.id === $("unifiedModelFilter").value
-  );
-  const selectedLegacy = state.status?.legacy_bundles?.find(
-    (bundle) => bundle.id === $("legacyBundleFilter").value
-  );
-  $("unifiedModelFilter").disabled = mode === "legacy";
-  $("legacyBundleFilter").disabled = mode === "unified" || negative;
+  $("unifiedModelFilter").querySelectorAll("input").forEach((input) => {
+    input.disabled = input.dataset.invalid === "true" || mode === "legacy";
+    input.closest("label")?.classList.toggle("disabled", input.disabled);
+  });
+  $("legacyBundleFilter").querySelectorAll("input").forEach((input) => {
+    input.disabled = input.dataset.invalid === "true" || mode === "unified" || negative;
+    input.closest("label")?.classList.toggle("disabled", input.disabled);
+  });
+  const unifiedCount = selectedIds("unifiedModelFilter").length;
+  const legacyCount = selectedIds("legacyBundleFilter").length;
   const runnable = mode === "unified"
-    ? selectedModel?.ready
+    ? unifiedCount > 0
     : mode === "legacy"
-      ? selectedLegacy?.ready && !negative
-      : selectedModel?.ready || (selectedLegacy?.ready && !negative);
+      ? legacyCount > 0 && !negative
+      : unifiedCount + legacyCount > 0;
   $("randomButton").disabled = !runnable;
   $("evaluateButton").disabled = !runnable;
+}
+
+function selectedPayload() {
+  return {
+    model_mode: $("modelFilter").value,
+    unified_model_ids: selectedIds("unifiedModelFilter"),
+    legacy_bundle_ids: selectedIds("legacyBundleFilter"),
+  };
 }
 
 async function evaluateOne() {
   const button = $("randomButton");
   setBusy(button, true, "Đang inference…");
-  showLoading("Đang đánh giá một ảnh…", "Ảnh được lấy ngẫu nhiên từ bộ lọc bên trái.");
+  showLoading("Đang đánh giá một ảnh…", "Ảnh được chạy qua tất cả model đã chọn.");
   try {
     const query = new URLSearchParams({
       food_status: $("foodStatusFilter").value,
@@ -310,19 +368,15 @@ async function evaluateOne() {
     const result = await api("/api/predict", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        path: sample.path,
-        model_mode: $("modelFilter").value,
-        unified_model_id: $("unifiedModelFilter").value,
-        legacy_bundle_id: $("legacyBundleFilter").value,
-      }),
+      body: JSON.stringify({ path: sample.path, ...selectedPayload() }),
     });
+    const cards = singleToCards(result);
     state.reportFile = null;
     $("reportActions").classList.add("hidden");
     $("summaryStrip").classList.add("hidden");
-    $("resultContext").textContent = "Một ảnh ngẫu nhiên từ test set";
-    $("resultCount").textContent = "1 ảnh";
-    showCards([singleToCard(result)]);
+    $("resultContext").textContent = "Một ảnh · tất cả model đã chọn";
+    $("resultCount").textContent = `${cards.length} kết quả model`;
+    showCards(cards);
   } catch (error) {
     toast(error.message);
     $("loadingState").classList.add("hidden");
@@ -332,22 +386,30 @@ async function evaluateOne() {
 
 function renderSummary(result) {
   $("summaryStrip").classList.remove("hidden");
-  const unified = result.models.unified;
-  $("unifiedSummary").textContent = unified.ready ? `${percent(unified.metrics.food_accuracy)} · ${percent(unified.metrics.category_accuracy)} · ${percent(unified.metrics.freshness_accuracy)} · ${percent(unified.metrics.joint_accuracy)}` : "Chưa có model";
-  $("unifiedSubSummary").textContent = unified.ready
-    ? `${unified.model.display_name} · Recall S/U/N: ${percent(unified.metrics.food_recall.SUPPORTED)} · ${percent(unified.metrics.food_recall.UNSUPPORTED)} · ${percent(unified.metrics.food_recall.NON_FOOD)}`
-    : "Food / Category / Freshness / End-to-end";
-  const legacy = result.models.legacy;
-  $("legacySummary").textContent = legacy.ready ? `${percent(legacy.metrics.pipeline_category_accuracy)} · ${percent(legacy.metrics.pipeline_freshness_accuracy)} · ${percent(legacy.metrics.pipeline_joint_accuracy)}` : "Chưa có model";
-  $("legacySubSummary").textContent = legacy.ready
-    ? `${legacy.bundle?.display_name || "Legacy"} · ${legacy.metrics.applicable_count.toLocaleString("vi-VN")} ảnh SUPPORTED`
-    : (legacy.error || "Không áp dụng");
-  $("oracleSummary").textContent = legacy.ready ? percent(legacy.metrics.oracle_freshness_accuracy) : "Chưa có model";
+  const unified = result.models.unified || [];
+  const unifiedReady = unified.filter((item) => item.ready);
+  $("unifiedSummary").textContent = `${unifiedReady.length}/${unified.length} model`;
+  $("unifiedSubSummary").innerHTML = unified.length ? unified.map((item) => item.ready
+    ? `<b>${escapeHtml(item.model.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.category_accuracy)} · Fresh ${percent(item.metrics.freshness_accuracy)} · Joint ${percent(item.metrics.joint_accuracy)}`
+    : `<b>${escapeHtml(item.model?.display_name || "Unified")}</b> · ${escapeHtml(item.error || "Không sẵn sàng")}`
+  ).join("<br>") : "Không chọn Unified";
+
+  const legacy = result.models.legacy || [];
+  const legacyReady = legacy.filter((item) => item.ready);
+  $("legacySummary").textContent = `${legacyReady.length}/${legacy.length} bundle`;
+  $("legacySubSummary").innerHTML = legacy.length ? legacy.map((item) => item.ready
+    ? `<b>${escapeHtml(item.bundle.display_name)}</b> · Cat ${percent(item.metrics.pipeline_category_accuracy)} · Fresh ${percent(item.metrics.pipeline_freshness_accuracy)} · Joint ${percent(item.metrics.pipeline_joint_accuracy)}`
+    : `<b>${escapeHtml(item.bundle?.display_name || "Legacy")}</b> · ${escapeHtml(item.error || "Không áp dụng")}`
+  ).join("<br>") : "Không chọn Legacy";
+  $("oracleSummary").textContent = legacyReady.length ? `${legacyReady.length} bundle` : "Chưa có";
+  $("oracleSummary").nextElementSibling.innerHTML = legacyReady.length
+    ? legacyReady.map((item) => `<b>${escapeHtml(item.bundle.display_name)}</b> · ${percent(item.metrics.oracle_freshness_accuracy)}`).join("<br>")
+    : "Freshness accuracy";
 }
 
 async function loadReportPage(offset) {
   if (!state.reportFile) return;
-  showLoading("Đang tải kết quả từng ảnh…", "Đọc dữ liệu chi tiết từ CSV report.");
+  showLoading("Đang tải kết quả từng model…", "Mỗi dòng report là một cặp ảnh × model.");
   const query = new URLSearchParams({ file: state.reportFile, offset, limit: state.pageSize });
   const page = await api(`/api/report_rows?${query}`);
   state.pageOffset = page.offset;
@@ -366,15 +428,13 @@ async function evaluateBatch() {
   const all = $("batchSize").value === "0";
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   setBusy(button, true, all ? "Đang chạy toàn bộ…" : "Đang inference…");
-  showLoading(all ? "Đang đánh giá toàn bộ ảnh…" : "Đang đánh giá batch…", "Kết quả được ghi dần ra CSV; thời gian phụ thuộc số ảnh và CPU.");
+  showLoading(all ? "Đang đánh giá toàn bộ ảnh…" : "Đang đánh giá batch…", "Mọi model được chạy tuần tự trên cùng danh sách ảnh.");
   try {
     const result = await api("/api/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model_mode: $("modelFilter").value,
-        unified_model_id: $("unifiedModelFilter").value,
-        legacy_bundle_id: $("legacyBundleFilter").value,
+        ...selectedPayload(),
         food_status: $("foodStatusFilter").value,
         category: $("categoryFilter").value,
         freshness: $("freshnessFilter").value,
@@ -390,8 +450,8 @@ async function evaluateBatch() {
     $("reportActions").classList.remove("hidden");
     $("resultContext").textContent = result.evaluated_all
       ? "Toàn bộ ảnh phù hợp bộ lọc"
-      : `Mẫu ngẫu nhiên seed ${result.filters.seed} · ${result.sample_count}/${result.candidate_count} ảnh`;
-    $("resultCount").textContent = `${result.sample_count.toLocaleString("vi-VN")} ảnh`;
+      : `Mẫu seed ${result.filters.seed} · ${result.sample_count}/${result.candidate_count} ảnh`;
+    $("resultCount").textContent = `${result.sample_count.toLocaleString("vi-VN")} ảnh · ${result.result_count.toLocaleString("vi-VN")} kết quả`;
     renderSummary(result);
     await loadReportPage(0);
   } catch (error) {

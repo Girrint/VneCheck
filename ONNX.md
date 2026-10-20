@@ -15,6 +15,17 @@ không làm model tốt hơn; cần có checkpoint đã train trước.
 python -m pip install -r requirements.txt
 ```
 
+Kiểm tra CUDA trước khi train:
+
+```powershell
+nvidia-smi
+python -c "import torch; print('torch:', torch.__version__); print('torch CUDA:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
+
+CUDA chỉ dùng cho train PyTorch; export và các script verify dưới đây chủ động
+chạy CPU. Hướng dẫn end-to-end để train lần lượt cả bốn backbone Legacy và
+Unified nằm trong [TRAIN.md](TRAIN.md).
+
 Kiểm tra các lệnh và tham số mà không chạy export:
 
 ```powershell
@@ -35,7 +46,7 @@ models/unified/food_multitask.pth
 Nếu chưa có, tạo manifest rồi train:
 
 ```powershell
-python scripts\build_unified_manifest.py
+python scripts\build_unified_manifest.py --negative-root data_negative
 python train_unified.py
 ```
 
@@ -99,11 +110,13 @@ python export_unified_onnx.py `
   --display-name "ResNet18 unified v1"
 ```
 
-So sánh output PyTorch và ONNX trên một ảnh test:
+So sánh đúng checkpoint và named ONNX vừa export trên một ảnh test:
 
 ```powershell
 python verify_unified_onnx.py `
-  --image data_split\test\qua\FRESH\apple\<ten_anh>.jpg
+  --image data_split\test\qua\FRESH\apple\<ten_anh>.jpg `
+  --checkpoint runs\<run_unified>\best_model.pth `
+  --onnx models\unified\exports\mobilenet_v3_small_v1.onnx
 ```
 
 Kết quả hợp lệ khi cả `food`, `category`, `freshness` đều báo `PASS`.
@@ -152,6 +165,19 @@ python export_onnx.py --bundle-name resnet18_v1 --display-name "ResNet18 legacy 
 Sau đó lặp lại với kiến trúc khác và một `--bundle-name` mới. Tất cả vẫn dùng
 cùng `data_split/train`, `valid`, `test`.
 
+Tên bundle đề xuất cho bốn backbone:
+
+| Backbone | Legacy bundle | Unified artifact |
+|---|---|---|
+| `mobilenet_v3_small` | `mobilenet_v3_small_v1` | `mobilenet_v3_small_v1` |
+| `mobilenet_v3_large` | `mobilenet_v3_large_v1` | `mobilenet_v3_large_v1` |
+| `efficientnet_b0` | `efficientnet_b0_v1` | `efficientnet_b0_v1` |
+| `resnet18` | `resnet18_v1` | `resnet18_v1` |
+
+Legacy và Unified nằm ở hai registry khác nhau nên có thể dùng cùng ID. Không
+dùng lại ID trong cùng một registry nếu muốn giữ phiên bản cũ; tăng hậu tố lên
+`v2`, `v3`, ...
+
 Lệnh cũ `python export_onnx.py` vẫn export vào `models/`, nhưng output đó không
 nằm trong registry bundle mặc định của web.
 
@@ -196,8 +222,8 @@ python -m local_web.server `
 
 Web quét toàn bộ `models/unified/**/*.onnx` và các bundle có `router.onnx`
 trong `models/legacy`. Chọn chế độ **Legacy**, **Unified** hoặc **Cả hai**, rồi
-chọn riêng `Unified ONNX model` và `Legacy ONNX bundle` ở ngay bên dưới. Bundle
-`models/legacy/original` tiếp tục là lựa chọn mặc định.
+tích một hoặc nhiều `Unified ONNX model` và `Legacy ONNX bundle` ở ngay bên
+dưới. Bundle `models/legacy/original` tiếp tục là lựa chọn mặc định.
 
 Web vẫn hoạt động nếu chỉ một trong hai pipeline sẵn sàng.
 Batch evaluation hỗ trợ 25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc.
@@ -206,17 +232,19 @@ seed được lưu trong JSON report. Trong một lượt không lặp cùng đ�
 Khi chạy toàn bộ test set bằng CPU, request có thể mất vài phút; trình duyệt
 giữ trạng thái chờ đến khi server cộng dồn xong metric.
 
-Kết thúc đánh giá, dùng **Tải CSV chi tiết** để lấy một dòng kết quả cho từng
-ảnh hoặc **Tải JSON tổng hợp** để lấy metric. File cũng được lưu tại:
+Kết thúc đánh giá, dùng **Tải CSV chi tiết** để lấy một dòng cho từng cặp
+ảnh–model hoặc **Tải JSON tổng hợp** để lấy metric riêng từng model. Ví dụ 100
+ảnh chạy qua 3 model tạo 300 dòng CSV. File cũng được lưu tại:
 
 ```text
 reports/web_evaluations/evaluation_<timestamp>_<id>.csv
 reports/web_evaluations/evaluation_<timestamp>_<id>.json
 ```
 
-Sau batch, khung bên phải hiển thị từng ảnh theo trang 20 ảnh, cùng truth,
-dự đoán, confidence và probability như chế độ đánh giá một ảnh. Bộ lọc và nút
-điều khiển nằm cố định ở cột trái trên màn hình desktop.
+Sau batch, khung bên phải hiển thị từng kết quả ảnh–model theo trang 20 dòng,
+cùng truth, dự đoán, confidence và probability như chế độ đánh giá một ảnh.
+Mọi model nhận đúng cùng danh sách ảnh và seed để số liệu có thể so sánh trực
+tiếp. Bộ lọc và nút điều khiển nằm cố định ở cột trái trên màn hình desktop.
 
 ## 5. Lỗi thường gặp
 

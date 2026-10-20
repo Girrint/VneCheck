@@ -8,8 +8,8 @@ Hệ thống có hai pipeline chạy song song:
 
 Cả hai dùng ba split độc lập; không lấy một phần train làm test. Legacy giữ
 nguyên kiến trúc 6 model để làm baseline, còn Unified hướng tới triển khai di
-động bằng một ONNX. Web local cho phép chọn một Unified artifact, một Legacy
-bundle hoặc chạy cả hai trên cùng ảnh. Xem [UNIFIED.md](UNIFIED.md).
+động bằng một ONNX. Web local cho phép tích chọn nhiều Unified artifact, nhiều
+Legacy bundle hoặc chạy cả hai nhóm trên cùng ảnh. Xem [UNIFIED.md](UNIFIED.md).
 
 ## Trạng thái hiện tại
 
@@ -39,6 +39,16 @@ python -m pip install -r requirements.txt
 ```
 
 ## Quy trình chuẩn
+
+Kiểm tra PyTorch có dùng CUDA trước khi train:
+
+```powershell
+nvidia-smi
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
+
+Quy trình copy-paste để train cả bốn backbone Legacy/Unified, export từng ONNX
+và verify đúng cặp artifact nằm tại [TRAIN.md](TRAIN.md).
 
 Kiểm tra hoặc tạo lại split:
 
@@ -138,10 +148,11 @@ Sau đó mở `http://127.0.0.1:8000`. Web có chế độ xem từng ảnh và 
 25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc trong
 `data_split/test` và `data_negative/test` bằng ONNX Runtime. Snapshot
 legacy mặc định lấy từ `models/legacy/original`; unified chưa export vẫn không
-ảnh hưởng việc đánh giá model cũ. Mỗi lần đánh giá sinh CSV chi tiết từng ảnh
-và JSON metric tổng hợp trong `reports/web_evaluations/`, có nút tải trên web.
-Web có hai ô chọn artifact độc lập: một unified ONNX và một legacy bundle; chế
-độ **Cả hai** chạy đúng hai lựa chọn đó trên cùng tập ảnh.
+ảnh hưởng việc đánh giá model cũ. Mỗi lần đánh giá sinh CSV chi tiết từng cặp
+ảnh–model và JSON metric riêng cho từng model trong `reports/web_evaluations/`,
+có nút tải trên web. Hai danh sách checkbox cho phép chọn đồng thời nhiều
+Unified ONNX và nhiều Legacy bundle; chế độ **Cả hai** chạy mọi lựa chọn trên
+cùng tập ảnh.
 Mỗi lượt batch dùng seed mới nên chạy lại sẽ lấy nhóm ảnh khác; seed
 được lưu trong JSON report và trong một lượt không lặp cùng đường dẫn ảnh.
 

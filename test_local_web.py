@@ -71,6 +71,9 @@ class LocalWebTests(unittest.TestCase):
         for field in (
             "image_path",
             "truth_freshness",
+            "evaluation_model_type",
+            "evaluation_model_id",
+            "evaluation_available",
             "unified_category_confidence",
             "legacy_pipeline_freshness",
             "legacy_oracle_correct",

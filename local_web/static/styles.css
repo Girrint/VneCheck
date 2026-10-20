@@ -39,6 +39,16 @@ h1 em { color: var(--green); font-weight: 400; }
 .section-title.compact h2 { font-size: 18px; }
 label { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
 select { width: 100%; margin-top: 7px; border: 1px solid var(--line); background: white; border-radius: 11px; padding: 11px 12px; color: var(--ink); font: inherit; text-transform: none; letter-spacing: 0; }
+.picker-field { display: grid; gap: 7px; }
+.picker-label { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.model-picker { display: grid; gap: 6px; max-height: 190px; overflow: auto; padding: 7px; border: 1px solid var(--line); background: white; border-radius: 11px; }
+.model-picker > small { padding: 5px; color: var(--muted); }
+.model-choice { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 8px; align-items: start; padding: 7px; color: var(--ink); border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.model-choice:hover { background: var(--green-soft); }
+.model-choice input { margin: 2px 0 0; accent-color: var(--green); }
+.model-choice span, .model-choice small { display: block; }
+.model-choice small { margin-top: 2px; color: var(--muted); font-weight: 500; line-height: 1.35; }
+.model-choice.disabled { opacity: .45; cursor: default; }
 .button { border: 0; border-radius: 11px; padding: 12px 15px; font-weight: 750; cursor: pointer; text-align: center; text-decoration: none; transition: transform .18s, opacity .18s; }
 .button:hover { transform: translateY(-1px); }
 .button:disabled { opacity: .45; cursor: wait; transform: none; }
@@ -58,7 +68,8 @@ select { width: 100%; margin-top: 7px; border: 1px solid var(--line); background
 .summary-group small, .summary-group strong, .summary-group span { display: block; }
 .summary-group small { color: var(--green); font-weight: 750; text-transform: uppercase; letter-spacing: .07em; }
 .summary-group strong { margin: 7px 0 3px; font-size: 19px; }
-.summary-group span { color: var(--muted); font-size: 10px; }
+.summary-group span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.summary-group span b { color: var(--ink); }
 .empty-state, .loading-state { min-height: 520px; display: grid; place-content: center; justify-items: center; text-align: center; }
 .empty-icon { color: var(--green); font: 400 64px Georgia, serif; }
 .empty-state h3, .loading-state h3 { margin: 10px 0 6px; font: 600 22px Georgia, serif; }

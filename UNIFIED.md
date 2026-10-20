@@ -186,17 +186,17 @@ Mở `http://127.0.0.1:8000`. Trang web lập chỉ mục ảnh positive từ
 `data_split/test` và negative từ `data_negative/test`, cho phép xem một dự đoán hoặc đo accuracy trên
 25/100/500/1.000/5.000 hay toàn bộ ảnh phù hợp bộ lọc. Mỗi lần chạy batch sinh
 một seed mới để lấy nhóm ảnh khác; seed được lưu trong JSON tổng hợp để truy
-lại lần đánh giá. Trong một lượt, cùng ảnh được chạy qua Unified artifact
-và/hoặc Legacy bundle đang chọn. Với Legacy, pipeline thật dùng router → expert,
+lại lần đánh giá. Trong một lượt, cùng ảnh được chạy qua mọi Unified artifact
+và/hoặc Legacy bundle được tích chọn. Với Legacy, pipeline thật dùng router → expert,
 còn oracle dùng category thật để đo riêng expert 2 lớp hoặc 3 lớp. Unified chưa
 có vẫn có thể đánh giá Legacy. Inference dùng ONNX Runtime CPU và tiền xử lý
 PIL/NumPy tương đương eval transform; web không cần load PyTorch model.
 
 Sau mỗi batch, web sinh hai report trong `reports/web_evaluations/`:
 
-- CSV: một dòng cho mỗi ảnh, gồm truth, dự đoán, confidence, đúng/sai, điểm và
-  xác suất từng lớp của unified, legacy pipeline và legacy oracle.
-- JSON: bộ lọc, số ảnh và metric tổng hợp của lần đánh giá.
+- CSV: một dòng cho mỗi cặp ảnh–model, gồm định danh model, truth, dự đoán,
+  confidence, đúng/sai, điểm và xác suất từng lớp.
+- JSON: bộ lọc, số ảnh, tổng số kết quả và metric riêng của từng model.
 
 Hai nút tải xuất hiện ngay dưới kết quả batch.
 
@@ -206,18 +206,17 @@ category/freshness và legacy chỉ được chấm trên ảnh `SUPPORTED`. CSV
 `truth_food_status`, dự đoán, confidence, xác suất và cờ đúng/sai của food head.
 
 Mục `Chế độ đánh giá` cho phép chạy `Chỉ Unified`, `Chỉ Legacy` hoặc cả hai.
-Mục `Unified ONNX model` chọn chính xác unified artifact. Mục
-`Legacy ONNX bundle` chọn một bộ hoàn chỉnh gồm router và năm expert. Cả hai
-hiển thị tên cùng kiến trúc đã train; chế độ `Cả hai` chạy đúng hai lựa chọn
-trên cùng ảnh để so sánh.
-Việc chọn một model sẽ bỏ qua inference của model còn lại. Khi lọc
+Hai danh sách checkbox cho phép chọn một hoặc nhiều Unified artifact và một
+hoặc nhiều Legacy bundle hoàn chỉnh gồm router và năm expert. Tất cả hiển thị
+tên cùng kiến trúc đã train và chạy trên đúng cùng danh sách ảnh để so sánh.
+Model không được tích sẽ không chạy inference. Khi lọc
 `UNSUPPORTED`/`NON_FOOD`, lựa chọn Legacy bị vô hiệu hóa vì pipeline cũ không
 có output food status.
 
 Giao diện desktop chia hai cột: bộ lọc và điều khiển ở bên trái; metric cùng
-kết quả từng ảnh ở bên phải. Kết quả batch dùng chính kiểu thẻ của chế độ một
-ảnh và đọc từ CSV theo từng trang 20 ảnh, nên có thể duyệt toàn bộ supported và
-negative test mà không nạp mọi dòng vào trình duyệt cùng lúc.
+kết quả từng ảnh ở bên phải. Mỗi model tạo một thẻ kết quả riêng cho cùng ảnh.
+Kết quả batch đọc CSV theo từng trang 20 cặp ảnh–model, nên có thể duyệt toàn
+bộ supported và negative test mà không nạp mọi dòng vào trình duyệt cùng lúc.
 
 Có thể đổi cổng hoặc đường dẫn artifact:
 

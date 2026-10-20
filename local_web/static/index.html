@@ -32,12 +32,14 @@
             <option value="legacy">Chỉ Legacy</option>
           </select>
         </label>
-        <label>Unified ONNX model
-          <select id="unifiedModelFilter"><option value="">Đang tìm model…</option></select>
-        </label>
-        <label>Legacy ONNX bundle (router + 5 expert)
-          <select id="legacyBundleFilter"><option value="">Đang tìm bundle…</option></select>
-        </label>
+        <div class="picker-field">
+          <span class="picker-label">Unified ONNX models</span>
+          <div id="unifiedModelFilter" class="model-picker"><small>Đang tìm model…</small></div>
+        </div>
+        <div class="picker-field">
+          <span class="picker-label">Legacy ONNX bundles</span>
+          <div id="legacyBundleFilter" class="model-picker"><small>Đang tìm bundle…</small></div>
+        </div>
         <label>Loại ảnh
           <select id="foodStatusFilter"><option value="">Tất cả loại ảnh</option></select>
         </label>
@@ -63,7 +65,7 @@
           </select>
         </label>
         <button id="evaluateButton" class="button secondary full">Chạy đánh giá batch</button>
-        <p class="control-note">Batch lớn được ghi dần ra CSV. Sau khi hoàn tất, kết quả từng ảnh xuất hiện bên phải theo trang.</p>
+        <p class="control-note">Mọi model đã chọn chạy trên cùng ảnh. CSV dùng một dòng cho mỗi cặp ảnh × model.</p>
 
         <div id="reportActions" class="report-actions hidden">
           <a id="downloadCsv" class="button primary" href="#">Tải CSV chi tiết</a>

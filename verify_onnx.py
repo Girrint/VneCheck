@@ -206,12 +206,14 @@ def main():
     print()
     print("=" * 80)
 
-    if all(results):
+    passed = all(results)
+    if passed:
         print("ALL MODELS VERIFIED SUCCESSFULLY")
     else:
         print("VERIFY FAILED")
 
     print("=" * 80)
+    raise SystemExit(0 if passed else 1)
 
 
 if __name__ == "__main__":
