@@ -1,16 +1,15 @@
 # VnGrocery AI
 
-Hệ thống phân loại ảnh thực phẩm theo hai tầng:
+Hệ thống có hai pipeline chạy song song:
 
-1. Router nhận diện 5 nhóm: `cu`, `gia_cam`, `gia_suc`, `qua`, `rau`.
-2. Expert của nhóm đã chọn dự đoán độ tươi.
+1. **Legacy:** router nhận diện 5 nhóm rồi chọn một trong 5 freshness expert.
+2. **Unified:** một backbone với ba head food/category/freshness, có thể từ
+   chối `UNSUPPORTED` và `NON_FOOD`.
 
-Model mặc định là MobileNetV3-Large pretrained từ ImageNet. Pipeline hiện dùng
-ba split độc lập trong `data_split/`; không còn lấy một phần train làm test.
-
-Một pipeline unified MobileNetV3-Small đã được thêm song song để thay
-6 ONNX bằng 1 ONNX ba output. Pipeline legacy vẫn là mặc định và đã được
-snapshot để so sánh/rollback. Xem [UNIFIED.md](UNIFIED.md).
+Cả hai dùng ba split độc lập; không lấy một phần train làm test. Legacy giữ
+nguyên kiến trúc 6 model để làm baseline, còn Unified hướng tới triển khai di
+động bằng một ONNX. Web local cho phép chọn một Unified artifact, một Legacy
+bundle hoặc chạy cả hai trên cùng ảnh. Xem [UNIFIED.md](UNIFIED.md).
 
 ## Trạng thái hiện tại
 
@@ -21,10 +20,14 @@ snapshot để so sánh/rollback. Xem [UNIFIED.md](UNIFIED.md).
 - pHash cluster không bị tách qua các split.
 - Các cluster quá lớn đối với validation/test được ép vào train.
 - Expert `gia_cam` và `gia_suc` có 3 lớp; `cu`, `qua`, `rau` có 2 lớp.
+- Negative: 10.000 ảnh, gồm 5.000 `UNSUPPORTED` và 5.000 `NON_FOOD`.
+- Unified manifest: 104.449 dòng trên ba split.
+- Bốn backbone dùng được cho cả hai pipeline: MobileNetV3-Small/Large,
+  EfficientNet-B0 và ResNet18.
 
-Các model đang có trong `models/` được tạo trước split sạch hiện tại. Cần train
-lại router và 5 expert trước khi dùng metric trên `data_split/test` làm kết quả
-chính thức.
+Snapshot `models/legacy/original` được tạo trước split sạch nên chỉ là baseline
+kỹ thuật. Unified artifact hiện tại có food gate ba lớp; mọi model mới vẫn phải
+được chọn bằng validation và chỉ dùng test để báo cáo cuối.
 
 ## Cài đặt
 
@@ -76,12 +79,14 @@ python evaluate_router_uncertainty.py
 python evaluate_end_to_end.py
 ```
 
-Export và kiểm tra ONNX legacy:
+Export và kiểm tra ONNX legacy thành bundle riêng:
 
 ```powershell
-python export_onnx.py
-python verify_onnx.py --image path\to\image.jpg
-python package_models.py --require-onnx
+python export_onnx.py --bundle-name mobilenet_v3_large_v1
+python verify_onnx.py `
+  --image path\to\image.jpg `
+  --checkpoint-root models `
+  --onnx-root models\legacy\mobilenet_v3_large_v1
 ```
 
 Hướng dẫn chi tiết cho cả unified và legacy: [ONNX.md](ONNX.md).
@@ -94,10 +99,10 @@ python -m unittest -v test_regression.py
 
 Có thể dùng `python main.py` nếu muốn thao tác qua menu.
 
-Unified positive baseline:
+Unified với food gate:
 
 ```powershell
-python scripts\build_unified_manifest.py
+python scripts\build_unified_manifest.py --negative-root data_negative
 python train_unified.py
 python evaluate_unified.py
 python export_unified_onnx.py
@@ -137,6 +142,8 @@ legacy mặc định lấy từ `models/legacy/original`; unified chưa export v
 và JSON metric tổng hợp trong `reports/web_evaluations/`, có nút tải trên web.
 Web có hai ô chọn artifact độc lập: một unified ONNX và một legacy bundle; chế
 độ **Cả hai** chạy đúng hai lựa chọn đó trên cùng tập ảnh.
+Mỗi lượt batch dùng seed mới nên chạy lại sẽ lấy nhóm ảnh khác; seed
+được lưu trong JSON report và trong một lượt không lặp cùng đường dẫn ảnh.
 
 ## Tài liệu
 

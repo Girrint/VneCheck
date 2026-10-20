@@ -155,7 +155,9 @@ cùng `data_split/train`, `valid`, `test`.
 Lệnh cũ `python export_onnx.py` vẫn export vào `models/`, nhưng output đó không
 nằm trong registry bundle mặc định của web.
 
-Hoặc chỉ định thư mục thủ công (không sinh manifest registry):
+Hoặc chỉ định thư mục thủ công. Cách này không sinh manifest metadata; nếu
+output nằm dưới registry `models/legacy`, web vẫn liệt kê bundle nhưng tên kiến
+trúc sẽ là `unknown`:
 
 ```powershell
 python export_onnx.py `
@@ -199,6 +201,8 @@ chọn riêng `Unified ONNX model` và `Legacy ONNX bundle` ở ngay bên dướ
 
 Web vẫn hoạt động nếu chỉ một trong hai pipeline sẵn sàng.
 Batch evaluation hỗ trợ 25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc.
+Mỗi lượt batch dùng seed ngẫu nhiên mới nên chạy lại sẽ lấy nhóm ảnh khác;
+seed được lưu trong JSON report. Trong một lượt không lặp cùng đường dẫn ảnh.
 Khi chạy toàn bộ test set bằng CPU, request có thể mất vài phút; trình duyệt
 giữ trạng thái chờ đến khi server cộng dồn xong metric.
 

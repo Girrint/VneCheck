@@ -27,6 +27,8 @@ Phương pháp:
 5. Chọn cấu hình cuối.
 6. Chỉ sau khi đã chốt cấu hình mới dùng test để báo cáo cuối.
 7. Đánh giá cả router riêng, expert với oracle category và end-to-end.
+8. Export mỗi Unified run bằng `--name` và mỗi Legacy pipeline bằng
+   `--bundle-name`; chọn đúng hai artifact trên web.
 
 Không dùng test accuracy để chọn model, threshold, learning rate hoặc epoch.
 Nếu đã xem test nhiều lần để ra quyết định, test đó đã trở thành validation và
@@ -59,8 +61,14 @@ ngoài tiêu chí xếp hạng.
 | Router | ... | ... | 42 | ... | ... | ... | n/a | ... |
 | Expert | ... | ... | 42 | ... | ... | ... | ... | ... |
 
-Model hiện có được train trước split sạch, vì vậy chưa điền chúng vào bảng kết
-quả chính thức. Hãy train lại rồi lấy số liệu từ `runs/<run>/summary.json`.
+Snapshot Legacy `models/legacy/original` được train trước split sạch, vì vậy
+không dùng metric của snapshot này làm kết quả chính thức. Hãy train lại rồi
+lấy số liệu từ `runs/<run>/summary.json`.
+
+Với Unified, dùng validation food macro-F1 để chọn checkpoint mặc định và xem
+thêm recall từng food status. Web batch sinh seed mới ở mỗi lượt để duyệt các
+mẫu khác nhau, nhưng không dùng việc chạy test lặp lại để tuning. Seed của lượt
+đánh giá được lưu trong JSON report.
 
 ## Tiêu chí triển khai
 

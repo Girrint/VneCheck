@@ -34,6 +34,17 @@ models/
     qua.pth / qua.onnx
     rau.pth / rau.onnx
   manifest.json
+  legacy/
+    original/                   # snapshot baseline cũ
+    <bundle-id>/                # một router + đủ 5 expert ONNX
+      router.onnx
+      freshness/*.onnx
+      manifest.json
+  unified/
+    food_multitask.pth
+    food_multitask.onnx
+    exports/<artifact-id>.onnx
+    exports/<artifact-id>.manifest.json
 ```
 
 Checkpoint PyTorch chứa ít nhất `state_dict`, `classes`, `model_name` và
@@ -65,18 +76,33 @@ score = Σ probability(class) × anchor(class)
 Với expert 2 lớp, tổng chỉ gồm `FRESH` và `SPOILED`. Điểm này là chỉ báo từ
 model, không phải phép đo vật lý hoặc chứng nhận an toàn thực phẩm.
 
+## Kiến trúc unified song song
+
+```text
+Ảnh RGB
+  │
+  ▼
+Backbone dùng chung
+  ├─ food head       → SUPPORTED / UNSUPPORTED / NON_FOOD
+  ├─ category head   → cu / gia_cam / gia_suc / qua / rau
+  └─ freshness head  → FRESH / HALF-FRESH / SPOILED
+```
+
+Unified hỗ trợ `mobilenet_v3_small`, `mobilenet_v3_large`, `efficientnet_b0`
+và `resnet18`. Với ảnh negative, category/freshness target bị mask nên chỉ food
+head nhận loss. Khi food head không dự đoán `SUPPORTED`, app không nên dùng
+category/freshness làm kết quả nghiệp vụ.
+
 ## Giới hạn hiện tại
 
 - Router dùng top-1 cứng; chưa có unknown/reject/fallback.
 - Softmax confidence chưa được calibration.
 - Sai router kéo theo chọn sai expert.
 - pHash giảm duplicate leakage nhưng không thay thế group metadata thật.
-- Model hiện có cần được train lại trên `data_split`.
+- Snapshot legacy `original` có trước split sạch, không phải benchmark cuối.
+- Negative dataset hiện chỉ có 10.000 ảnh và vẫn cần mở rộng nguồn thực tế.
+- Web chạy ONNX Runtime CPU; latency trên điện thoại phải benchmark riêng.
 
-## Kiến trúc unified song song
-
-Pipeline mới không thay pipeline trên. Nó dùng một MobileNetV3-Small backbone
-với ba head food/category/freshness và xuất một ONNX ba output. Các entry point,
-checkpoint và manifest nằm trong namespace `unified`; `predict_pipeline.py`
-chọn `legacy`, `unified` hoặc chạy cả hai để đối chiếu. Chi tiết tại
-[UNIFIED.md](UNIFIED.md).
+Pipeline unified không thay trực tiếp pipeline legacy. Các artifact nằm trong
+namespace `models/unified`; `predict_pipeline.py` và web có thể chọn legacy,
+unified hoặc chạy cả hai để đối chiếu. Chi tiết tại [UNIFIED.md](UNIFIED.md).

@@ -11,7 +11,7 @@
 | `evaluate_end_to_end.py` | Đánh giá router, oracle expert và pipeline thật |
 | `tune.py` | Grid search nhiều kiến trúc/cấu hình |
 | `benchmark_mobilenet.py` | So sánh các biến thể MobileNetV3 cố định |
-| `export_onnx.py` | Export checkpoint PyTorch sang ONNX |
+| `export_onnx.py` | Export đủ router + 5 expert thành Legacy ONNX bundle có manifest |
 | `verify_onnx.py` | So output PyTorch và ONNX trên một ảnh |
 | `package_models.py` | Tạo manifest checksum và tùy chọn copy artifact |
 | `test_regression.py` | Regression tests cho contract, split và preprocessing |
@@ -32,7 +32,7 @@
 | `model.py` | Model factory, freeze classifier và load checkpoint |
 | `experiment.py` | Theo dõi run, CSV metric và classification report |
 | `unified_data.py` | Dataset manifest và masked target cho unified model |
-| `unified_model.py` | MobileNetV3 dùng chung backbone và ba head |
+| `unified_model.py` | Một trong 4 backbone dùng chung với ba head |
 | `unified_loss.py` | Multi-task loss bỏ qua nhãn không áp dụng |
 
 ## Script dữ liệu
@@ -44,12 +44,17 @@ scripts/resplit_dataset.py
 scripts/dataset_stats.py
 scripts/build_unified_manifest.py
 scripts/snapshot_legacy_models.py
+scripts/extract_food101_parquet.py
+scripts/split_negative_dataset.py
 ```
 
 `resplit_dataset.py` đảm nhiệm SHA-256 dedupe, quarantine xung đột nhãn, pHash
 clustering, chia 70/15/15 và sinh audit report. `dataset_stats.py` chỉ đếm file
-theo split/category/freshness/product, không mở nội dung ảnh. Các script chia
-valid, xóa duplicate và near-duplicate cũ đã được bỏ.
+theo split/category/freshness/product, không mở nội dung ảnh.
+`extract_food101_parquet.py` lấy `UNSUPPORTED` từ Parquet;
+`split_negative_dataset.py` dedupe/audit rồi chia negative;
+`build_unified_manifest.py` ghép supported và negative thành manifest train.
+Các script chia valid, xóa duplicate và near-duplicate cũ đã được bỏ.
 
 ## Thư mục runtime
 
@@ -57,12 +62,13 @@ valid, xóa duplicate và near-duplicate cũ đã được bỏ.
 |---|---|
 | `data/` | Dataset nguồn cũ, không dùng trực tiếp để train |
 | `data_split/` | Dataset train/valid/test hiện tại |
+| `data_negative/` | Negative staging/split cho UNSUPPORTED và NON_FOOD |
 | `reports/` | Cache và audit của quá trình resplit |
 | `runs/` | Config, metric, checkpoint và summary từng lần train |
 | `models/` | Checkpoint/ONNX đang được dùng khi inference |
 
-`data/`, `data_split/`, `runs/`, `models/` và report sinh tự động không nên
-commit vào Git.
+`data/`, `data_split/`, `data_negative/`, `runs/`, `models/` và report sinh tự
+động không nên commit vào Git.
 
 ## Tài liệu
 
@@ -83,6 +89,8 @@ commit vào Git.
 
 `local_web/static/` chứa frontend HTML/CSS/JavaScript. `local_web/server.py`
 phục vụ frontend, ảnh trong `data_split/test` và inference ONNX Runtime. Web
-chạy unified một-model song song với legacy router → expert; chế độ oracle dùng
-category thật để đo riêng expert 2/3 lớp. Server chỉ bind `127.0.0.1` theo mặc
-định và không cho đọc file ngoài test set.
+quét nhiều Unified ONNX và nhiều Legacy bundle; người dùng chọn từng artifact
+rồi chạy một pipeline hoặc cả hai. Ảnh negative lấy thêm từ
+`data_negative/test`; chế độ oracle dùng category thật để đo riêng expert 2/3
+lớp. Server chỉ bind `127.0.0.1` theo mặc định và không cho đọc file ngoài test
+set.

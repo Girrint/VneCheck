@@ -78,6 +78,11 @@ models/router.pth
 models/freshness/<category>.pth
 ```
 
+Với Unified, checkpoint tốt nhất được copy vào
+`models/unified/food_multitask.pth`. Mỗi run vẫn giữ bản riêng tại
+`runs/<run>/best_model.pth`; dùng bản trong run khi export nhiều artifact để
+không nhầm checkpoint đã bị lần train sau ghi đè.
+
 `summary.json` chứa validation tốt nhất, test loss, test accuracy, macro-F1,
 metric từng lớp và confusion matrix.
 
@@ -120,5 +125,6 @@ Chọn cấu hình bằng validation loss/F1, không chọn bằng test. Các sc
 vẫn ghi test của từng trial vì gọi `train.py`; không dùng các test score đó để
 tuning hoặc liên tục điều chỉnh model.
 
-Các checkpoint hiện có được train trước khi tạo `data_split`; hãy train lại đủ
-router và 5 expert trước khi công bố kết quả trên test sạch.
+Snapshot `models/legacy/original` được train trước khi tạo `data_split`; hãy
+train lại đủ router và 5 expert trước khi công bố baseline Legacy trên test
+sạch. Unified và các bundle mới phải ghi rõ run/checkpoint được dùng để export.

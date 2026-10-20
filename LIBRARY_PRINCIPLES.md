@@ -45,9 +45,10 @@ liên thông thành cluster. Cả hai không xác định chắc chắn hai ản
 
 ## ONNX
 
-`export_onnx.py` chuyển checkpoint sang graph ONNX. `onnx` kiểm tra graph và
-`onnxruntime` chạy inference CPU. `verify_onnx.py` yêu cầu top-1 giống PyTorch
-và sai khác xác suất tối đa dưới `1e-5` trên ảnh kiểm tra.
+`export_onnx.py` đóng gói sáu Legacy graph; `export_unified_onnx.py` tạo một
+graph ba output và sidecar metadata cho từng artifact. `onnxruntime` chạy
+inference CPU trên web. Các script verify yêu cầu top-1 giống PyTorch và sai
+khác xác suất tối đa dưới `1e-5` trên ảnh kiểm tra.
 
 ## Nguyên tắc an toàn thực nghiệm
 

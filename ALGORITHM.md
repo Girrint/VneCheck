@@ -69,7 +69,20 @@ Hai transfer-learning mode:
 5. Softmax, argmax và tính freshness score.
 6. Trả JSON gồm nhãn, confidence, score và cảnh báo.
 
-## 5. Metric
+## 5. Huấn luyện và inference unified
+
+Unified dùng một backbone và ba head. Loss tổng là tổng có trọng số của:
+
+- Food cross-entropy trên cả `SUPPORTED`, `UNSUPPORTED`, `NON_FOOD`.
+- Category cross-entropy chỉ trên `SUPPORTED`.
+- Freshness cross-entropy chỉ trên `SUPPORTED`.
+
+Food loss mặc định dùng class weight `sqrt_inverse` để giảm thiên lệch giữa
+66.115 positive train và 3.500 ảnh ở mỗi lớp negative. Checkpoint tốt nhất mặc
+định chọn bằng validation food macro-F1. Inference tạo ba logits trong một lần
+forward; category/freshness chỉ có ý nghĩa khi food status là `SUPPORTED`.
+
+## 6. Metric
 
 `train.py` lưu accuracy, loss, macro-F1, precision, recall, F1 từng lớp và
 confusion matrix. Macro-F1 quan trọng khi class không cân bằng; cần xem riêng

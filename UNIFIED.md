@@ -6,7 +6,7 @@ bị đổi đường dẫn hoặc bị ghi đè.
 ## Kiến trúc
 
 ```text
-MobileNetV3-Small backbone
+Backbone dùng chung
   ├─ food_logits       : SUPPORTED / UNSUPPORTED / NON_FOOD
   ├─ category_logits   : cu / gia_cam / gia_suc / qua / rau
   └─ freshness_logits  : FRESH / HALF-FRESH / SPOILED
@@ -14,6 +14,8 @@ MobileNetV3-Small backbone
 
 Một lần forward tạo cả ba output. Khi train negative image, category và
 freshness dùng `ignore_index`; masked loss chỉ cập nhật food head cho mẫu đó.
+Backbone có thể là `mobilenet_v3_small`, `mobilenet_v3_large`,
+`efficientnet_b0` hoặc `resnet18`.
 
 ## Legacy snapshot
 
@@ -23,9 +25,8 @@ Baseline hiện tại đã được đóng băng tại:
 models/legacy/original/
 ```
 
-Thư mục chứa 6 checkpoint PyTorch, 6 ONNX và `manifest.json` checksum. Snapshot
-dùng bản copy độc lập để việc train hoặc ghi đè model legacy sau này không làm
-thay đổi baseline.
+Thư mục chứa 6 checkpoint PyTorch, 6 ONNX và `manifest.json` checksum. Đây là
+baseline trước clean-split retraining, được giữ độc lập để rollback/đối chiếu.
 
 Có thể tạo snapshot khác trước mỗi benchmark:
 
@@ -33,9 +34,12 @@ Có thể tạo snapshot khác trước mỗi benchmark:
 python scripts\snapshot_legacy_models.py --name clean_split
 ```
 
+Với model mới, cách ưu tiên là export một bundle ONNX có tên bằng
+`python export_onnx.py --bundle-name <id>` sau khi train đủ router và 5 expert.
+
 ## Manifest dữ liệu
 
-Tạo manifest positive-only hiện tại:
+Chỉ khi cần baseline không có food gate, tạo manifest positive-only bằng:
 
 ```powershell
 python scripts\build_unified_manifest.py
@@ -182,11 +186,11 @@ Mở `http://127.0.0.1:8000`. Trang web lập chỉ mục ảnh positive từ
 `data_split/test` và negative từ `data_negative/test`, cho phép xem một dự đoán hoặc đo accuracy trên
 25/100/500/1.000/5.000 hay toàn bộ ảnh phù hợp bộ lọc. Mỗi lần chạy batch sinh
 một seed mới để lấy nhóm ảnh khác; seed được lưu trong JSON tổng hợp để truy
-lại lần đánh giá. Trong một lượt, cùng ảnh được chạy qua snapshot legacy
-`models/legacy/original`: pipeline thật dùng router → expert, còn oracle dùng
-category thật để đo riêng expert 2 lớp hoặc 3 lớp. Unified chưa có vẫn có thể
-đánh giá legacy. Inference dùng ONNX Runtime CPU và tiền xử lý PIL/NumPy tương
-đương eval transform; web không cần load PyTorch model.
+lại lần đánh giá. Trong một lượt, cùng ảnh được chạy qua Unified artifact
+và/hoặc Legacy bundle đang chọn. Với Legacy, pipeline thật dùng router → expert,
+còn oracle dùng category thật để đo riêng expert 2 lớp hoặc 3 lớp. Unified chưa
+có vẫn có thể đánh giá Legacy. Inference dùng ONNX Runtime CPU và tiền xử lý
+PIL/NumPy tương đương eval transform; web không cần load PyTorch model.
 
 Sau mỗi batch, web sinh hai report trong `reports/web_evaluations/`:
 
@@ -212,8 +216,8 @@ có output food status.
 
 Giao diện desktop chia hai cột: bộ lọc và điều khiển ở bên trái; metric cùng
 kết quả từng ảnh ở bên phải. Kết quả batch dùng chính kiểu thẻ của chế độ một
-ảnh và đọc từ CSV theo từng trang 20 ảnh, nên có thể duyệt toàn bộ test set mà
-không nạp 14.162 dòng vào trình duyệt cùng lúc.
+ảnh và đọc từ CSV theo từng trang 20 ảnh, nên có thể duyệt toàn bộ supported và
+negative test mà không nạp mọi dòng vào trình duyệt cùng lúc.
 
 Có thể đổi cổng hoặc đường dẫn artifact:
 
