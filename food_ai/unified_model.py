@@ -5,7 +5,12 @@ from torchvision import models
 from food_ai.config import CATEGORIES, FOOD_STATUS_CLASSES, FRESHNESS_CLASSES
 
 
-UNIFIED_MODEL_NAMES = ("mobilenet_v3_small", "mobilenet_v3_large")
+UNIFIED_MODEL_NAMES = (
+    "mobilenet_v3_small",
+    "mobilenet_v3_large",
+    "efficientnet_b0",
+    "resnet18",
+)
 
 
 class UnifiedFoodModel(nn.Module):
@@ -27,14 +32,34 @@ class UnifiedFoodModel(nn.Module):
                 else None
             )
             base = models.mobilenet_v3_large(weights=weights)
+        elif model_name == "efficientnet_b0":
+            weights = (
+                models.EfficientNet_B0_Weights.DEFAULT
+                if pretrained
+                else None
+            )
+            base = models.efficientnet_b0(weights=weights)
+        elif model_name == "resnet18":
+            weights = (
+                models.ResNet18_Weights.DEFAULT
+                if pretrained
+                else None
+            )
+            base = models.resnet18(weights=weights)
         else:
             raise ValueError(f"Unified model không hỗ trợ: {model_name}")
 
         self.model_name = model_name
-        self.features = base.features
-        self.avgpool = base.avgpool
-        self.shared_classifier = base.classifier[:-1]
-        feature_size = base.classifier[-1].in_features
+        if model_name == "resnet18":
+            self.features = nn.Sequential(*list(base.children())[:-2])
+            self.avgpool = base.avgpool
+            self.shared_classifier = nn.Identity()
+            feature_size = base.fc.in_features
+        else:
+            self.features = base.features
+            self.avgpool = base.avgpool
+            self.shared_classifier = base.classifier[:-1]
+            feature_size = base.classifier[-1].in_features
         self.food_head = nn.Linear(feature_size, len(FOOD_STATUS_CLASSES))
         self.category_head = nn.Linear(feature_size, len(CATEGORIES))
         self.freshness_head = nn.Linear(feature_size, len(FRESHNESS_CLASSES))

@@ -47,6 +47,17 @@ Mặc định: 15 epoch, batch 16, MobileNetV3-Large, fine-tune, AdamW, Plateau,
 learning rate `5e-4`, weight decay `1e-4`, label smoothing `0.05`, seed `42`.
 Early stopping xảy ra sau 3 epoch không cải thiện validation loss.
 
+Các backbone legacy hỗ trợ: `mobilenet_v3_small`, `mobilenet_v3_large`,
+`efficientnet_b0`, `resnet18`. Unified hỗ trợ cùng bốn backbone, ví dụ:
+
+```powershell
+python train_unified.py --model efficientnet_b0 --run-name efficientnet_b0_v1
+python train_unified.py --model resnet18 --run-name resnet18_v1
+```
+
+Mỗi lệnh vẫn đọc cùng manifest/split hiện tại. Dùng `--run-name` khác nhau và
+export từng `runs/<run>/best_model.pth` bằng tên artifact khác để web so sánh.
+
 ## Output
 
 Mỗi run tạo:

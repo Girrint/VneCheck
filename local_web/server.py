@@ -46,6 +46,7 @@ DEFAULT_TEST_ROOT = PROJECT_ROOT / DATA_DIR / "test"
 DEFAULT_NEGATIVE_TEST_ROOT = PROJECT_ROOT / "data_negative" / "test"
 DEFAULT_MODEL = PROJECT_ROOT / UNIFIED_ONNX_MODEL
 DEFAULT_UNIFIED_ROOT = PROJECT_ROOT / "models" / "unified"
+DEFAULT_LEGACY_REGISTRY_ROOT = PROJECT_ROOT / "models" / "legacy"
 DEFAULT_LEGACY_ROOT = PROJECT_ROOT / "models" / "legacy" / "original"
 DEFAULT_REPORT_ROOT = PROJECT_ROOT / "reports" / "web_evaluations"
 MODEL_MODES = ("both", "unified", "legacy")
@@ -62,7 +63,9 @@ REPORT_FIELDS = [
     *[f"unified_food_probability_{name}" for name in FOOD_STATUS_CLASSES],
     *[f"unified_category_probability_{name}" for name in CATEGORIES],
     *[f"unified_freshness_probability_{name}" for name in FRESHNESS_CLASSES],
-    "legacy_available", "legacy_router_category",
+    "legacy_available", "legacy_bundle_id", "legacy_bundle_name",
+    "legacy_router_architecture", "legacy_expert_architectures",
+    "legacy_router_category",
     "legacy_router_confidence", "legacy_pipeline_freshness",
     "legacy_pipeline_freshness_confidence", "legacy_pipeline_score",
     "legacy_pipeline_expert_classes", "legacy_category_correct",
@@ -318,8 +321,14 @@ class OnnxRuntimeModel:
 
 
 class LegacyOnnxRuntimeModel:
-    def __init__(self, root):
+    def __init__(self, root, bundle_id=None):
         self.root = Path(root).resolve()
+        self.bundle_id = bundle_id or self.root.name
+        self.display_name = self.root.name
+        self.metadata = {}
+        self.router_architecture = "unknown"
+        self.expert_architectures = {}
+        self.training_methods = []
         self.router_path = self.root / "router.onnx"
         self.manifest_path = self.root / "manifest.json"
         self.sessions = {}
@@ -337,12 +346,21 @@ class LegacyOnnxRuntimeModel:
             return
         try:
             manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            self.metadata = manifest
+            self.bundle_id = str(manifest.get("bundle_id") or manifest.get("name") or self.bundle_id)
+            self.display_name = str(manifest.get("display_name") or manifest.get("name") or self.bundle_id)
             checkpoints = manifest["checkpoints"]
             self.category_classes = list(checkpoints["router"]["classes"])
+            self.router_architecture = str(checkpoints["router"].get("model_name") or "unknown")
             for category in CATEGORIES:
-                self.freshness_classes[category] = list(
-                    checkpoints[f"freshness/{category}"]["classes"]
-                )
+                checkpoint = checkpoints[f"freshness/{category}"]
+                self.freshness_classes[category] = list(checkpoint["classes"])
+                self.expert_architectures[category] = str(checkpoint.get("model_name") or "unknown")
+            self.training_methods = sorted({
+                str(checkpoint.get("training_method"))
+                for checkpoint in checkpoints.values()
+                if checkpoint.get("training_method")
+            })
         except (OSError, ValueError, KeyError, TypeError) as error:
             self.error = f"Legacy manifest không hợp lệ: {error}"
 
@@ -360,6 +378,21 @@ class LegacyOnnxRuntimeModel:
     @property
     def ready(self):
         return self.error is None
+
+    def descriptor(self):
+        expert_values = sorted(set(self.expert_architectures.values()))
+        return {
+            "id": self.bundle_id,
+            "display_name": self.display_name,
+            "root": str(self.root),
+            "ready": self.ready,
+            "error": self.error,
+            "router_architecture": self.router_architecture,
+            "expert_architectures": self.expert_architectures,
+            "expert_architecture_summary": ", ".join(expert_values) or "unknown",
+            "training_methods": self.training_methods,
+            "created_at_utc": self.metadata.get("created_at_utc"),
+        }
 
     def _session(self, key, path):
         if key not in self.sessions:
@@ -505,6 +538,37 @@ def discover_unified_models(root, preferred_path):
     return models, default_id
 
 
+def discover_legacy_bundles(root, preferred_root):
+    root = Path(root).resolve()
+    preferred_root = Path(preferred_root).resolve()
+    directories = set()
+    if root.is_dir():
+        directories.update(path.parent for path in root.rglob("router.onnx"))
+    if (preferred_root / "router.onnx").is_file():
+        directories.add(preferred_root)
+
+    bundles = {}
+    default_id = None
+    for directory in sorted(directories, key=lambda item: str(item).lower()):
+        try:
+            relative_id = directory.relative_to(root).as_posix()
+        except ValueError:
+            relative_id = directory.name
+        bundle = LegacyOnnxRuntimeModel(directory, relative_id)
+        bundle_id = bundle.bundle_id
+        if bundle_id in bundles:
+            bundle_id = relative_id
+            bundle.bundle_id = bundle_id
+        if bundle_id in bundles:
+            raise ValueError(f"Trùng legacy bundle id: {bundle_id}")
+        bundles[bundle_id] = bundle
+        if directory == preferred_root:
+            default_id = bundle_id
+    if default_id is None and bundles:
+        default_id = next(iter(bundles))
+    return bundles, default_id
+
+
 class LocalEvaluationApp:
     def __init__(
         self,
@@ -514,6 +578,7 @@ class LocalEvaluationApp:
         report_root=DEFAULT_REPORT_ROOT,
         negative_test_root=DEFAULT_NEGATIVE_TEST_ROOT,
         unified_root=DEFAULT_UNIFIED_ROOT,
+        legacy_registry_root=DEFAULT_LEGACY_REGISTRY_ROOT,
     ):
         self.test_root = Path(test_root).resolve()
         self.negative_test_root = Path(negative_test_root).resolve()
@@ -534,7 +599,15 @@ class LocalEvaluationApp:
             self.unified_models[fallback.model_id] = fallback
             self.default_unified_model_id = fallback.model_id
         self.model = self.unified_models[self.default_unified_model_id]
-        self.legacy_model = LegacyOnnxRuntimeModel(legacy_root)
+        self.legacy_registry_root = Path(legacy_registry_root).resolve()
+        self.legacy_models, self.default_legacy_bundle_id = discover_legacy_bundles(
+            self.legacy_registry_root, legacy_root
+        )
+        if not self.legacy_models:
+            fallback = LegacyOnnxRuntimeModel(legacy_root)
+            self.legacy_models[fallback.bundle_id] = fallback
+            self.default_legacy_bundle_id = fallback.bundle_id
+        self.legacy_model = self.legacy_models[self.default_legacy_bundle_id]
         self.report_root = Path(report_root).resolve()
 
     def resolve_sample_path(self, relative_path):
@@ -571,6 +644,13 @@ class LocalEvaluationApp:
         if model is None:
             raise ValueError(f"Không tìm thấy unified ONNX model: {selected_id}")
         return model
+
+    def legacy_bundle(self, bundle_id=None):
+        selected_id = bundle_id or self.default_legacy_bundle_id
+        bundle = self.legacy_models.get(selected_id)
+        if bundle is None:
+            raise ValueError(f"Không tìm thấy legacy ONNX bundle: {selected_id}")
+        return bundle
 
     def report_rows(self, filename, offset=0, limit=20):
         path = self.resolve_report_path(filename)
@@ -640,6 +720,10 @@ class LocalEvaluationApp:
             "legacy_ready": self.legacy_model.ready,
             "legacy_error": self.legacy_model.error,
             "legacy_root": str(self.legacy_model.root),
+            "default_legacy_bundle_id": self.default_legacy_bundle_id,
+            "legacy_bundles": [
+                bundle.descriptor() for bundle in self.legacy_models.values()
+            ],
             "food_gate_ready": self.model.food_gate_ready,
             "default_unified_model_id": self.default_unified_model_id,
             "unified_models": [
@@ -670,7 +754,13 @@ class LocalEvaluationApp:
             },
         }
 
-    def predict(self, relative_path, model_mode="both", unified_model_id=None):
+    def predict(
+        self,
+        relative_path,
+        model_mode="both",
+        unified_model_id=None,
+        legacy_bundle_id=None,
+    ):
         self.validate_model_mode(model_mode)
         sample = self.by_path.get(relative_path)
         path = self.resolve_sample_path(relative_path)
@@ -678,6 +768,7 @@ class LocalEvaluationApp:
         use_unified = model_mode in {"both", "unified"}
         use_legacy = model_mode in {"both", "legacy"}
         model = self.unified_model(unified_model_id) if use_unified else None
+        legacy_model = self.legacy_bundle(legacy_bundle_id) if use_legacy else None
         if model is not None and model.ready:
             prediction = model.predict_batch([path])[0]
             prediction["model"] = model.descriptor()
@@ -700,8 +791,8 @@ class LocalEvaluationApp:
                 "error": model.error if model is not None else "Unified không được chọn",
             }
 
-        if use_legacy and self.legacy_model.ready and sample["food_status"] == "SUPPORTED":
-            legacy = self.legacy_model.predict_batch(
+        if legacy_model is not None and legacy_model.ready and sample["food_status"] == "SUPPORTED":
+            legacy = legacy_model.predict_batch(
                 [path], [sample["category"]]
             )[0]
             pipeline = legacy["pipeline"]
@@ -718,6 +809,7 @@ class LocalEvaluationApp:
             }
             result["legacy"] = {
                 "ready": True,
+                "bundle": legacy_model.descriptor(),
                 "pipeline": pipeline,
                 "oracle": oracle,
             }
@@ -726,7 +818,7 @@ class LocalEvaluationApp:
                 "ready": False,
                 "applicable": sample["food_status"] == "SUPPORTED",
                 "error": (
-                    (self.legacy_model.error if use_legacy else "Legacy không được chọn")
+                    (legacy_model.error if legacy_model is not None else "Legacy không được chọn")
                     if sample["food_status"] == "SUPPORTED"
                     else "Legacy không có food gate nên không chấm ảnh negative"
                 ),
@@ -742,6 +834,7 @@ class LocalEvaluationApp:
         seed,
         model_mode="both",
         unified_model_id=None,
+        legacy_bundle_id=None,
     ):
         self.validate_model_mode(model_mode)
         candidates = self.filter_samples(food_status, category, freshness)
@@ -764,6 +857,7 @@ class LocalEvaluationApp:
         use_unified = model_mode in {"both", "unified"}
         use_legacy = model_mode in {"both", "legacy"}
         model = self.unified_model(unified_model_id) if use_unified else None
+        legacy_model = self.legacy_bundle(legacy_bundle_id) if use_legacy else None
         if use_legacy and not use_unified and not supported_total:
             raise ValueError("Legacy không có food gate nên không thể chấm ảnh negative")
         csv_path, summary_path = self._report_paths()
@@ -835,13 +929,13 @@ class LocalEvaluationApp:
                                 row[f"unified_category_probability_{name}"] = value
                             for name, value in output["probabilities"]["freshness"].items():
                                 row[f"unified_freshness_probability_{name}"] = value
-                    if use_legacy and self.legacy_model.ready:
+                    if legacy_model is not None and legacy_model.ready:
                         supported_items = [
                             (sample, path, row)
                             for sample, path, row in zip(batch, paths, rows)
                             if sample["food_status"] == "SUPPORTED"
                         ]
-                        outputs = self.legacy_model.predict_batch(
+                        outputs = legacy_model.predict_batch(
                             [item[1] for item in supported_items],
                             [item[0]["category"] for item in supported_items],
                         ) if supported_items else []
@@ -864,6 +958,14 @@ class LocalEvaluationApp:
                             legacy_counts["oracle"] += oracle_correct
                             row.update({
                                 "legacy_available": True,
+                                "legacy_bundle_id": legacy_model.bundle_id,
+                                "legacy_bundle_name": legacy_model.display_name,
+                                "legacy_router_architecture": legacy_model.router_architecture,
+                                "legacy_expert_architectures": json.dumps(
+                                    legacy_model.expert_architectures,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                ),
                                 "legacy_router_category": pipeline["category"],
                                 "legacy_router_confidence": pipeline["category_confidence"],
                                 "legacy_pipeline_freshness": pipeline["freshness"],
@@ -925,7 +1027,7 @@ class LocalEvaluationApp:
                 "supported_count": supported_total,
             }
         legacy_metrics = None
-        if use_legacy and self.legacy_model.ready and supported_total:
+        if legacy_model is not None and legacy_model.ready and supported_total:
             legacy_metrics = {
                 "pipeline_category_accuracy": legacy_counts["category"] / supported_total,
                 "pipeline_freshness_accuracy": legacy_counts["freshness"] / supported_total,
@@ -940,6 +1042,10 @@ class LocalEvaluationApp:
             "filters": {
                 "model_mode": model_mode,
                 "unified_model_id": model.model_id if model is not None else None,
+                "legacy_bundle_id": (
+                    legacy_model.bundle_id if legacy_model is not None else None
+                ),
+                "seed": seed,
                 "food_status": food_status,
                 "category": category,
                 "freshness": freshness,
@@ -954,12 +1060,16 @@ class LocalEvaluationApp:
                 "legacy": {
                     "ready": legacy_metrics is not None,
                     "error": (
-                        (self.legacy_model.error if use_legacy else "Legacy không được chọn")
-                        if not (use_legacy and self.legacy_model.ready)
+                        (legacy_model.error if legacy_model is not None else "Legacy không được chọn")
+                        if not (legacy_model is not None and legacy_model.ready)
                         else (
                             None if supported_total
                             else "Legacy không áp dụng cho ảnh negative"
                         )
+                    ),
+                    "bundle": (
+                        legacy_model.descriptor()
+                        if legacy_model is not None else None
                     ),
                     "metrics": legacy_metrics,
                 },
@@ -1039,6 +1149,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not candidates:
                     self._error(HTTPStatus.NOT_FOUND, "Không có ảnh phù hợp bộ lọc")
                     return
+                exclude_path = query.get("exclude_path", [None])[0] or None
+                if exclude_path and len(candidates) > 1:
+                    candidates = [
+                        sample for sample in candidates
+                        if sample["path"] != exclude_path
+                    ]
                 self._json(random.choice(candidates))
                 return
             if parsed.path == "/api/image":
@@ -1090,6 +1206,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     payload.get("path", ""),
                     payload.get("model_mode", "both"),
                     payload.get("unified_model_id") or None,
+                    payload.get("legacy_bundle_id") or None,
                 ))
                 return
             if parsed.path == "/api/evaluate":
@@ -1101,6 +1218,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     payload.get("seed", 42),
                     payload.get("model_mode", "both"),
                     payload.get("unified_model_id") or None,
+                    payload.get("legacy_bundle_id") or None,
                 ))
                 return
             self._error(HTTPStatus.NOT_FOUND, "API không tồn tại")
@@ -1131,6 +1249,12 @@ def main():
         "--legacy-root", type=Path, default=DEFAULT_LEGACY_ROOT
     )
     parser.add_argument(
+        "--legacy-registry-root",
+        type=Path,
+        default=DEFAULT_LEGACY_REGISTRY_ROOT,
+        help="Thư mục quét các bundle legacy ONNX",
+    )
+    parser.add_argument(
         "--report-root", type=Path, default=DEFAULT_REPORT_ROOT
     )
     args = parser.parse_args()
@@ -1142,6 +1266,7 @@ def main():
         args.report_root,
         args.negative_test_root,
         args.onnx_root,
+        args.legacy_registry_root,
     )
     RequestHandler.app = app
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
@@ -1153,13 +1278,15 @@ def main():
     print(f"  ONNX root : {app.unified_root}")
     ready_models = sum(model.ready for model in app.unified_models.values())
     print(f"  Unified   : {ready_models}/{len(app.unified_models)} model sẵn sàng")
-    print(f"  Legacy    : {'sẵn sàng' if app.legacy_model.ready else 'chưa có'}")
+    ready_bundles = sum(bundle.ready for bundle in app.legacy_models.values())
+    print(f"  Legacy    : {ready_bundles}/{len(app.legacy_models)} bundle sẵn sàng")
     print(f"  Reports   : {app.report_root}")
     for model in app.unified_models.values():
         state = "sẵn sàng" if model.ready else model.error
         print(f"    - {model.display_name} [{model.model_id}]: {state}")
-    if app.legacy_model.error:
-        print(f"  Legacy    : {app.legacy_model.error}")
+    for bundle in app.legacy_models.values():
+        state = "sẵn sàng" if bundle.ready else bundle.error
+        print(f"    - {bundle.display_name} [{bundle.bundle_id}]: {state}")
     print("  Dừng      : Ctrl+C")
     print("=" * 68)
     try:

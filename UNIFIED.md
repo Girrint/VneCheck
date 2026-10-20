@@ -180,8 +180,9 @@ python -m local_web.server
 
 Mở `http://127.0.0.1:8000`. Trang web lập chỉ mục ảnh positive từ
 `data_split/test` và negative từ `data_negative/test`, cho phép xem một dự đoán hoặc đo accuracy trên
-25/100/500/1.000/5.000 hay toàn bộ ảnh phù hợp bộ lọc. Khi lấy mẫu, seed 42
-giúp kết quả lặp lại. Cùng ảnh được chạy qua snapshot legacy
+25/100/500/1.000/5.000 hay toàn bộ ảnh phù hợp bộ lọc. Mỗi lần chạy batch sinh
+một seed mới để lấy nhóm ảnh khác; seed được lưu trong JSON tổng hợp để truy
+lại lần đánh giá. Trong một lượt, cùng ảnh được chạy qua snapshot legacy
 `models/legacy/original`: pipeline thật dùng router → expert, còn oracle dùng
 category thật để đo riêng expert 2 lớp hoặc 3 lớp. Unified chưa có vẫn có thể
 đánh giá legacy. Inference dùng ONNX Runtime CPU và tiền xử lý PIL/NumPy tương
@@ -201,8 +202,10 @@ category/freshness và legacy chỉ được chấm trên ảnh `SUPPORTED`. CSV
 `truth_food_status`, dự đoán, confidence, xác suất và cờ đúng/sai của food head.
 
 Mục `Chế độ đánh giá` cho phép chạy `Chỉ Unified`, `Chỉ Legacy` hoặc cả hai.
-Mục `Unified ONNX model` chọn chính xác artifact và hiển thị tên model,
-kiến trúc đã train cùng training method.
+Mục `Unified ONNX model` chọn chính xác unified artifact. Mục
+`Legacy ONNX bundle` chọn một bộ hoàn chỉnh gồm router và năm expert. Cả hai
+hiển thị tên cùng kiến trúc đã train; chế độ `Cả hai` chạy đúng hai lựa chọn
+trên cùng ảnh để so sánh.
 Việc chọn một model sẽ bỏ qua inference của model còn lại. Khi lọc
 `UNSUPPORTED`/`NON_FOOD`, lựa chọn Legacy bị vô hiệu hóa vì pipeline cũ không
 có output food status.
@@ -230,8 +233,11 @@ Có thể đổi thư mục negative test:
 python -m local_web.server --negative-test-root data_negative/test
 ```
 
-Đổi snapshot legacy nếu cần:
+Web mặc định quét các bundle trong `models/legacy`. Có thể đổi registry và
+bundle mặc định nếu cần:
 
 ```powershell
-python -m local_web.server --legacy-root models/legacy/clean_split
+python -m local_web.server `
+  --legacy-registry-root path/to/legacy-bundles `
+  --legacy-root path/to/legacy-bundles/clean_split
 ```

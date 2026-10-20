@@ -4,6 +4,7 @@ const state = {
   pageOffset: 0,
   pageSize: 20,
   totalRows: 0,
+  lastRandomPath: null,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -97,7 +98,7 @@ function resultCard(data) {
 
   const legacy = data.legacy?.available ? `
     <article class="model-card">
-      <div class="model-card-header"><strong>Legacy · router → expert</strong><span class="verdict ${data.legacy.jointCorrect ? "" : "wrong"}">${data.legacy.jointCorrect ? "Đúng" : "Sai"}</span></div>
+      <div class="model-card-header"><strong>${escapeHtml(data.legacy.bundleName || "Legacy")} · ${escapeHtml(data.legacy.routerArchitecture || "router")} → expert</strong><span class="verdict ${data.legacy.jointCorrect ? "" : "wrong"}">${data.legacy.jointCorrect ? "Đúng" : "Sai"}</span></div>
       <div class="prediction-grid">
         <div class="prediction"><small>Router</small><strong>${escapeHtml(labelFor("categories", data.legacy.category))}</strong><span>${percent(data.legacy.categoryConfidence)}</span></div>
         <div class="prediction"><small>Expert ${escapeHtml(data.legacy.classCount)} lớp</small><strong>${escapeHtml(labelFor("freshness", data.legacy.freshness))}</strong><span>${percent(data.legacy.freshnessConfidence)}</span></div>
@@ -143,6 +144,8 @@ function singleToCard(result) {
   } : { available: false };
   const legacy = result.legacy.ready ? {
     available: true,
+    bundleName: result.legacy.bundle?.display_name,
+    routerArchitecture: result.legacy.bundle?.router_architecture,
     category: result.legacy.pipeline.category,
     categoryConfidence: result.legacy.pipeline.category_confidence,
     freshness: result.legacy.pipeline.freshness,
@@ -182,6 +185,8 @@ function csvToCard(row) {
     legacy: {
       available: booleanValue(row.legacy_available),
       applicable: row.truth_food_status === "SUPPORTED",
+      bundleName: row.legacy_bundle_name,
+      routerArchitecture: row.legacy_router_architecture,
       category: row.legacy_router_category,
       categoryConfidence: row.legacy_router_confidence,
       freshness: row.legacy_pipeline_freshness,
@@ -228,6 +233,18 @@ async function loadStatus() {
     unifiedSelect.append(option);
   });
   unifiedSelect.value = status.default_unified_model_id || "";
+  const legacySelect = $("legacyBundleFilter");
+  legacySelect.innerHTML = "";
+  status.legacy_bundles.forEach((bundle) => {
+    const option = document.createElement("option");
+    option.value = bundle.id;
+    const experts = bundle.expert_architecture_summary || "unknown";
+    option.textContent = `${bundle.display_name} · router ${bundle.router_architecture} · expert ${experts}${bundle.ready ? "" : " (lỗi)"}`;
+    option.disabled = !bundle.ready;
+    option.dataset.ready = String(bundle.ready);
+    legacySelect.append(option);
+  });
+  legacySelect.value = status.default_legacy_bundle_id || "";
   fillSelect($("foodStatusFilter"), status.labels.food_statuses);
   fillSelect($("categoryFilter"), status.labels.categories);
   fillSelect($("freshnessFilter"), status.labels.freshness);
@@ -263,12 +280,16 @@ function syncControls() {
   const selectedModel = state.status?.unified_models?.find(
     (model) => model.id === $("unifiedModelFilter").value
   );
+  const selectedLegacy = state.status?.legacy_bundles?.find(
+    (bundle) => bundle.id === $("legacyBundleFilter").value
+  );
   $("unifiedModelFilter").disabled = mode === "legacy";
+  $("legacyBundleFilter").disabled = mode === "unified" || negative;
   const runnable = mode === "unified"
     ? selectedModel?.ready
     : mode === "legacy"
-      ? state.status?.legacy_ready && !negative
-      : selectedModel?.ready || (state.status?.legacy_ready && !negative);
+      ? selectedLegacy?.ready && !negative
+      : selectedModel?.ready || (selectedLegacy?.ready && !negative);
   $("randomButton").disabled = !runnable;
   $("evaluateButton").disabled = !runnable;
 }
@@ -278,8 +299,14 @@ async function evaluateOne() {
   setBusy(button, true, "Đang inference…");
   showLoading("Đang đánh giá một ảnh…", "Ảnh được lấy ngẫu nhiên từ bộ lọc bên trái.");
   try {
-    const query = new URLSearchParams({ food_status: $("foodStatusFilter").value, category: $("categoryFilter").value, freshness: $("freshnessFilter").value });
+    const query = new URLSearchParams({
+      food_status: $("foodStatusFilter").value,
+      category: $("categoryFilter").value,
+      freshness: $("freshnessFilter").value,
+    });
+    if (state.lastRandomPath) query.set("exclude_path", state.lastRandomPath);
     const sample = await api(`/api/random?${query}`);
+    state.lastRandomPath = sample.path;
     const result = await api("/api/predict", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -287,6 +314,7 @@ async function evaluateOne() {
         path: sample.path,
         model_mode: $("modelFilter").value,
         unified_model_id: $("unifiedModelFilter").value,
+        legacy_bundle_id: $("legacyBundleFilter").value,
       }),
     });
     state.reportFile = null;
@@ -312,7 +340,7 @@ function renderSummary(result) {
   const legacy = result.models.legacy;
   $("legacySummary").textContent = legacy.ready ? `${percent(legacy.metrics.pipeline_category_accuracy)} · ${percent(legacy.metrics.pipeline_freshness_accuracy)} · ${percent(legacy.metrics.pipeline_joint_accuracy)}` : "Chưa có model";
   $("legacySubSummary").textContent = legacy.ready
-    ? `${legacy.metrics.applicable_count.toLocaleString("vi-VN")} ảnh SUPPORTED`
+    ? `${legacy.bundle?.display_name || "Legacy"} · ${legacy.metrics.applicable_count.toLocaleString("vi-VN")} ảnh SUPPORTED`
     : (legacy.error || "Không áp dụng");
   $("oracleSummary").textContent = legacy.ready ? percent(legacy.metrics.oracle_freshness_accuracy) : "Chưa có model";
 }
@@ -336,6 +364,7 @@ async function loadReportPage(offset) {
 async function evaluateBatch() {
   const button = $("evaluateButton");
   const all = $("batchSize").value === "0";
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   setBusy(button, true, all ? "Đang chạy toàn bộ…" : "Đang inference…");
   showLoading(all ? "Đang đánh giá toàn bộ ảnh…" : "Đang đánh giá batch…", "Kết quả được ghi dần ra CSV; thời gian phụ thuộc số ảnh và CPU.");
   try {
@@ -345,11 +374,12 @@ async function evaluateBatch() {
       body: JSON.stringify({
         model_mode: $("modelFilter").value,
         unified_model_id: $("unifiedModelFilter").value,
+        legacy_bundle_id: $("legacyBundleFilter").value,
         food_status: $("foodStatusFilter").value,
         category: $("categoryFilter").value,
         freshness: $("freshnessFilter").value,
         limit: Number($("batchSize").value),
-        seed: 42,
+        seed,
       }),
     });
     state.reportFile = result.reports.csv.filename;
@@ -358,7 +388,9 @@ async function evaluateBatch() {
     $("downloadJson").href = result.reports.summary_json.url;
     $("downloadJson").download = result.reports.summary_json.filename;
     $("reportActions").classList.remove("hidden");
-    $("resultContext").textContent = result.evaluated_all ? "Toàn bộ ảnh phù hợp bộ lọc" : `Mẫu ngẫu nhiên seed 42 · ${result.sample_count}/${result.candidate_count} ảnh`;
+    $("resultContext").textContent = result.evaluated_all
+      ? "Toàn bộ ảnh phù hợp bộ lọc"
+      : `Mẫu ngẫu nhiên seed ${result.filters.seed} · ${result.sample_count}/${result.candidate_count} ảnh`;
     $("resultCount").textContent = `${result.sample_count.toLocaleString("vi-VN")} ảnh`;
     renderSummary(result);
     await loadReportPage(0);
@@ -374,6 +406,7 @@ $("evaluateButton").addEventListener("click", evaluateBatch);
 $("foodStatusFilter").addEventListener("change", syncControls);
 $("modelFilter").addEventListener("change", syncControls);
 $("unifiedModelFilter").addEventListener("change", syncControls);
+$("legacyBundleFilter").addEventListener("change", syncControls);
 $("previousPage").addEventListener("click", () => loadReportPage(Math.max(0, state.pageOffset - state.pageSize)).catch((error) => toast(error.message)));
 $("nextPage").addEventListener("click", () => loadReportPage(state.pageOffset + state.pageSize).catch((error) => toast(error.message)));
 loadStatus().catch((error) => toast(error.message));

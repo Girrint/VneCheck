@@ -125,6 +125,12 @@ class PreprocessingTests(unittest.TestCase):
 
 
 class UnifiedModelTests(unittest.TestCase):
+    def test_unified_supports_same_backbones_as_legacy(self):
+        from food_ai.model import MODEL_NAMES
+        from food_ai.unified_model import UNIFIED_MODEL_NAMES
+
+        self.assertEqual(UNIFIED_MODEL_NAMES, MODEL_NAMES)
+
     def test_sqrt_inverse_food_weights_follow_class_order(self):
         try:
             from food_ai.unified_loss import compute_class_weights
@@ -270,7 +276,13 @@ class LocalWebNegativeTests(unittest.TestCase):
             predict_batch=lambda paths: predictions[:len(paths)],
         )
         app.unified_model = lambda model_id=None: app.model
-        app.legacy_model = SimpleNamespace(ready=False, error="disabled")
+        app.legacy_model = SimpleNamespace(
+            ready=False,
+            error="disabled",
+            bundle_id="disabled",
+            descriptor=lambda: {"id": "disabled"},
+        )
+        app.legacy_bundle = lambda bundle_id=None: app.legacy_model
         app.resolve_sample_path = lambda path: Path(path)
 
         csv_path = MagicMock()
@@ -303,6 +315,22 @@ class UnifiedExportTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             safe_artifact_name(" / ")
+
+
+class LegacyExportTests(unittest.TestCase):
+    def test_bundle_name_is_filesystem_safe(self):
+        from export_onnx import safe_bundle_name
+
+        self.assertEqual(
+            safe_bundle_name("ResNet 18 / baseline"),
+            "ResNet_18_baseline",
+        )
+
+    def test_empty_bundle_name_is_rejected(self):
+        from export_onnx import safe_bundle_name
+
+        with self.assertRaises(ValueError):
+            safe_bundle_name(" / ")
 
 
 class ManifestTests(unittest.TestCase):

@@ -113,6 +113,15 @@ python export_unified_onnx.py `
   --display-name "MobileNetV3 Small v1"
 ```
 
+Legacy cũng có thể giữ nhiều bộ router + năm expert. Sau khi train đủ sáu task
+của cùng một kiến trúc, export thành bundle riêng:
+
+```powershell
+python export_onnx.py `
+  --bundle-name resnet18_v1 `
+  --display-name "ResNet18 legacy v1"
+```
+
 Web local so sánh unified ONNX với pipeline legacy router → expert trực tiếp
 trên cùng ảnh test positive và negative:
 
@@ -126,6 +135,8 @@ Sau đó mở `http://127.0.0.1:8000`. Web có chế độ xem từng ảnh và 
 legacy mặc định lấy từ `models/legacy/original`; unified chưa export vẫn không
 ảnh hưởng việc đánh giá model cũ. Mỗi lần đánh giá sinh CSV chi tiết từng ảnh
 và JSON metric tổng hợp trong `reports/web_evaluations/`, có nút tải trên web.
+Web có hai ô chọn artifact độc lập: một unified ONNX và một legacy bundle; chế
+độ **Cả hai** chạy đúng hai lựa chọn đó trên cùng tập ảnh.
 
 ## Tài liệu
 

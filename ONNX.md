@@ -88,6 +88,17 @@ models/unified/exports/mobilenet_v3_small_v1.manifest.json
 Không dùng lại cùng `--name` nếu muốn giữ artifact cũ. Web tự quét đệ quy
 `models/unified/**/*.onnx`; có thể đổi thư mục bằng `--onnx-root`.
 
+Unified hỗ trợ `mobilenet_v3_small`, `mobilenet_v3_large`, `efficientnet_b0`
+và `resnet18`. Ví dụ train rồi export một ResNet18 độc lập:
+
+```powershell
+python train_unified.py --model resnet18 --run-name resnet18_v1
+python export_unified_onnx.py `
+  --checkpoint runs\<run-resnet18>\best_model.pth `
+  --name resnet18_v1 `
+  --display-name "ResNet18 unified v1"
+```
+
 So sánh output PyTorch và ONNX trên một ảnh test:
 
 ```powershell
@@ -102,24 +113,49 @@ Kết quả hợp lệ khi cả `food`, `category`, `freshness` đều báo `PAS
 Snapshot `models/legacy/original` đã có sẵn sáu ONNX, vì vậy web local không
 cần export lại để đánh giá baseline cũ.
 
-Muốn export checkpoint hiện hành trong `models/`:
+Muốn export checkpoint hiện hành trong `models/` thành một bundle có tên để
+web tự nhận diện:
 
 ```powershell
-python export_onnx.py
+python export_onnx.py `
+  --bundle-name mobilenet_v3_large_v1 `
+  --display-name "MobileNetV3 Large legacy v1"
 ```
 
 Lệnh trên ghi hoặc ghi đè:
 
 ```text
-models/router.onnx
-models/freshness/cu.onnx
-models/freshness/gia_cam.onnx
-models/freshness/gia_suc.onnx
-models/freshness/qua.onnx
-models/freshness/rau.onnx
+models/legacy/mobilenet_v3_large_v1/router.onnx
+models/legacy/mobilenet_v3_large_v1/freshness/cu.onnx
+models/legacy/mobilenet_v3_large_v1/freshness/gia_cam.onnx
+models/legacy/mobilenet_v3_large_v1/freshness/gia_suc.onnx
+models/legacy/mobilenet_v3_large_v1/freshness/qua.onnx
+models/legacy/mobilenet_v3_large_v1/freshness/rau.onnx
+models/legacy/mobilenet_v3_large_v1/manifest.json
 ```
 
-Để không ghi đè artifact hiện hành, export vào thư mục mới:
+Một legacy bundle luôn phải đủ router và năm expert. Script dừng nếu thiếu bất
+kỳ checkpoint nào để tránh vô tình trộn model từ hai lần train. Vì `train.py`
+copy checkpoint tốt nhất vào `models/`, hãy train đủ sáu task của một kiến trúc
+rồi export bundle **trước khi** bắt đầu kiến trúc tiếp theo:
+
+```powershell
+python train.py --model resnet18 router
+python train.py --model resnet18 freshness --category cu
+python train.py --model resnet18 freshness --category gia_cam
+python train.py --model resnet18 freshness --category gia_suc
+python train.py --model resnet18 freshness --category qua
+python train.py --model resnet18 freshness --category rau
+python export_onnx.py --bundle-name resnet18_v1 --display-name "ResNet18 legacy v1"
+```
+
+Sau đó lặp lại với kiến trúc khác và một `--bundle-name` mới. Tất cả vẫn dùng
+cùng `data_split/train`, `valid`, `test`.
+
+Lệnh cũ `python export_onnx.py` vẫn export vào `models/`, nhưng output đó không
+nằm trong registry bundle mặc định của web.
+
+Hoặc chỉ định thư mục thủ công (không sinh manifest registry):
 
 ```powershell
 python export_onnx.py `
@@ -156,9 +192,14 @@ python -m local_web.server `
   --legacy-root models\legacy\reexported
 ```
 
+Web quét toàn bộ `models/unified/**/*.onnx` và các bundle có `router.onnx`
+trong `models/legacy`. Chọn chế độ **Legacy**, **Unified** hoặc **Cả hai**, rồi
+chọn riêng `Unified ONNX model` và `Legacy ONNX bundle` ở ngay bên dưới. Bundle
+`models/legacy/original` tiếp tục là lựa chọn mặc định.
+
 Web vẫn hoạt động nếu chỉ một trong hai pipeline sẵn sàng.
 Batch evaluation hỗ trợ 25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc.
-Khi chạy toàn bộ 14.162 ảnh bằng CPU, request có thể mất vài phút; trình duyệt
+Khi chạy toàn bộ test set bằng CPU, request có thể mất vài phút; trình duyệt
 giữ trạng thái chờ đến khi server cộng dồn xong metric.
 
 Kết thúc đánh giá, dùng **Tải CSV chi tiết** để lấy một dòng kết quả cho từng
