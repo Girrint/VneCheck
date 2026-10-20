@@ -143,7 +143,9 @@ def encode_records(records, hash_size, workers, cache_path):
 
     jobs = [(record["path"], hash_size) for record in pending]
     executor = None
-    if workers == 0:
+    if not jobs:
+        results = ()
+    elif workers == 0:
         results = map(phash_worker, jobs)
     else:
         executor = ProcessPoolExecutor(max_workers=workers)
@@ -205,7 +207,9 @@ def encode_sha256(records, workers, cache_path):
 
     paths = [record["path"] for record in pending]
     executor = None
-    if workers == 0:
+    if not paths:
+        results = ()
+    elif workers == 0:
         results = map(sha256_worker, paths)
     else:
         executor = ProcessPoolExecutor(max_workers=workers)

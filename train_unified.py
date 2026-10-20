@@ -23,7 +23,11 @@ from food_ai.config import (
 from food_ai.data import preprocessing_metadata
 from food_ai.experiment import classification_report, create_run_directory
 from food_ai.unified_data import IGNORE_INDEX, create_unified_loaders
-from food_ai.unified_loss import MaskedMultiTaskLoss
+from food_ai.unified_loss import (
+    FOOD_CLASS_BALANCE_MODES,
+    MaskedMultiTaskLoss,
+    compute_class_weights,
+)
 from food_ai.unified_model import UNIFIED_MODEL_NAMES, create_unified_model
 
 
@@ -56,6 +60,18 @@ def parse_args():
     parser.add_argument("--food-loss-weight", type=float, default=1.0)
     parser.add_argument("--category-loss-weight", type=float, default=1.0)
     parser.add_argument("--freshness-loss-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--food-class-balance",
+        choices=FOOD_CLASS_BALANCE_MODES,
+        default="sqrt_inverse",
+        help="Cân bằng CrossEntropy của food head theo số mẫu train",
+    )
+    parser.add_argument(
+        "--selection-metric",
+        choices=("food_macro_f1", "valid_loss"),
+        default="food_macro_f1",
+        help="Metric chọn best checkpoint và early stopping",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-name")
     return parser.parse_args()
@@ -196,6 +212,15 @@ def food_gate_ready(datasets):
     return all(required.issubset(dataset.status_counts) for dataset in datasets.values())
 
 
+def metric_columns(prefix, report):
+    values = {f"{prefix}_macro_f1": report["macro_f1"]}
+    for row in report["per_class"]:
+        class_name = row["class"].lower()
+        for metric in ("precision", "recall", "f1"):
+            values[f"{prefix}_{class_name}_{metric}"] = row[metric]
+    return values
+
+
 def main():
     args = parse_args()
     validate_args(args)
@@ -219,6 +244,24 @@ def main():
             "trong cả ba split. Food gate sẽ được đánh dấu chưa sẵn sàng."
         )
     effective_food_weight = args.food_loss_weight if gate_ready else 0.0
+    effective_selection_metric = (
+        args.selection_metric if gate_ready else "valid_loss"
+    )
+    food_class_weights = None
+    if gate_ready:
+        food_class_weights = compute_class_weights(
+            datasets["train"].status_counts,
+            FOOD_STATUS_CLASSES,
+            args.food_class_balance,
+        )
+    serialized_food_class_weights = (
+        None
+        if food_class_weights is None
+        else {
+            name: round(float(weight), 6)
+            for name, weight in zip(FOOD_STATUS_CLASSES, food_class_weights)
+        }
+    )
 
     run_dir = create_run_directory("unified", None, args.model, args.run_name)
     config = {
@@ -229,6 +272,8 @@ def main():
         "freshness_classes": FRESHNESS_CLASSES,
         "food_gate_ready": gate_ready,
         "effective_food_loss_weight": effective_food_weight,
+        "effective_selection_metric": effective_selection_metric,
+        "food_class_weights": serialized_food_class_weights,
         "split_sizes": {name: len(dataset) for name, dataset in datasets.items()},
         "status_counts": {
             name: dict(dataset.status_counts) for name, dataset in datasets.items()
@@ -250,7 +295,8 @@ def main():
         category_weight=args.category_loss_weight,
         freshness_weight=args.freshness_loss_weight,
         label_smoothing=args.label_smoothing,
-    )
+        food_class_weights=food_class_weights,
+    ).to(DEVICE)
     optimizer = optim.AdamW(
         parameters, lr=args.learning_rate, weight_decay=args.weight_decay
     )
@@ -260,11 +306,18 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=USE_CUDA)
 
     metrics_path = run_dir / "metrics.csv"
+    food_metric_fields = tuple(
+        f"valid_food_{status.lower()}_{metric}"
+        for status in FOOD_STATUS_CLASSES
+        for metric in ("precision", "recall", "f1")
+    )
     fieldnames = (
         "epoch",
         "train_loss",
         "valid_loss",
         "valid_food_accuracy",
+        "valid_food_macro_f1",
+        *food_metric_fields,
         "valid_category_accuracy",
         "valid_freshness_accuracy",
         "learning_rate",
@@ -274,7 +327,8 @@ def main():
     with metrics_path.open("w", newline="", encoding="utf-8") as stream:
         csv.DictWriter(stream, fieldnames=fieldnames).writeheader()
 
-    best_loss = float("inf")
+    best_score = float("-inf")
+    best_valid_loss = float("inf")
     best_epoch = 0
     stale_epochs = 0
     best_path = run_dir / "best_model.pth"
@@ -287,7 +341,9 @@ def main():
             "training_method": args.method,
             "epoch": epoch,
             "best_epoch": best_epoch,
-            "best_loss": best_loss,
+            "best_score": best_score,
+            "best_valid_loss": best_valid_loss,
+            "selection_metric": effective_selection_metric,
             "food_gate_ready": gate_ready,
             "food_status_classes": FOOD_STATUS_CLASSES,
             "category_classes": CATEGORIES,
@@ -299,6 +355,8 @@ def main():
     print(f"Run: {run_dir}")
     print(f"Model: {args.model} | device: {config['device']}")
     print(f"Split sizes: {config['split_sizes']}")
+    print(f"Food class weights: {serialized_food_class_weights}")
+    print(f"Best checkpoint metric: {effective_selection_metric}")
 
     for epoch in range(1, args.epochs + 1):
         started = time.perf_counter()
@@ -307,9 +365,18 @@ def main():
         )
         valid_result = run_epoch(model, loaders["valid"], criterion)
         valid_loss = valid_result["loss"]
-        improved = valid_loss < best_loss
+        food_report = valid_result["reports"]["food"]
+        score = (
+            food_report["macro_f1"]
+            if effective_selection_metric == "food_macro_f1"
+            else -valid_loss
+        )
+        improved = score > best_score or (
+            score == best_score and valid_loss < best_valid_loss
+        )
         if improved:
-            best_loss = valid_loss
+            best_score = score
+            best_valid_loss = valid_loss
             best_epoch = epoch
             stale_epochs = 0
         else:
@@ -320,7 +387,8 @@ def main():
             "epoch": epoch,
             "train_loss": round(train_result["loss"], 6),
             "valid_loss": round(valid_loss, 6),
-            "valid_food_accuracy": valid_result["reports"]["food"]["accuracy"],
+            "valid_food_accuracy": food_report["accuracy"],
+            **metric_columns("valid_food", food_report),
             "valid_category_accuracy": valid_result["reports"]["category"]["accuracy"],
             "valid_freshness_accuracy": valid_result["reports"]["freshness"]["accuracy"],
             "learning_rate": optimizer.param_groups[0]["lr"],
@@ -340,6 +408,8 @@ def main():
         print(
             f"Epoch {epoch:02d}/{args.epochs} | "
             f"train={train_result['loss']:.4f} | valid={valid_loss:.4f} | "
+            f"food={100 * row['valid_food_accuracy']:.2f}%/"
+            f"F1={100 * row['valid_food_macro_f1']:.2f}% | "
             f"cat={100 * row['valid_category_accuracy']:.2f}% | "
             f"fresh={100 * row['valid_freshness_accuracy']:.2f}%"
             + (" | saved" if improved else ""),
@@ -354,7 +424,9 @@ def main():
     test_result = run_epoch(model, loaders["test"], criterion)
     summary = {
         "best_epoch": best_epoch,
-        "best_valid_loss": round(best_loss, 6),
+        "selection_metric": effective_selection_metric,
+        "best_score": round(best_score, 6),
+        "best_valid_loss": round(best_valid_loss, 6),
         "food_gate_ready": gate_ready,
         "test_loss": round(test_result["loss"], 6),
         "test": test_result,

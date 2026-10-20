@@ -35,19 +35,29 @@ from food_ai.config import (
 )
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 DEFAULT_TEST_ROOT = PROJECT_ROOT / DATA_DIR / "test"
+DEFAULT_NEGATIVE_TEST_ROOT = PROJECT_ROOT / "data_negative" / "test"
 DEFAULT_MODEL = PROJECT_ROOT / UNIFIED_ONNX_MODEL
+DEFAULT_UNIFIED_ROOT = PROJECT_ROOT / "models" / "unified"
 DEFAULT_LEGACY_ROOT = PROJECT_ROOT / "models" / "legacy" / "original"
 DEFAULT_REPORT_ROOT = PROJECT_ROOT / "reports" / "web_evaluations"
+MODEL_MODES = ("both", "unified", "legacy")
 
 REPORT_FIELDS = [
-    "image_path", "truth_category", "truth_freshness", "truth_product",
-    "unified_available", "unified_food_status", "unified_food_confidence",
+    "image_path", "truth_food_status", "truth_category", "truth_freshness",
+    "truth_product",
+    "unified_available", "unified_model_id", "unified_model_name",
+    "unified_architecture", "unified_food_status", "unified_food_confidence",
     "unified_category", "unified_category_confidence", "unified_freshness",
     "unified_freshness_confidence", "unified_score",
-    "unified_category_correct", "unified_freshness_correct",
+    "unified_food_correct", "unified_category_correct", "unified_freshness_correct",
     "unified_joint_correct",
     *[f"unified_food_probability_{name}" for name in FOOD_STATUS_CLASSES],
     *[f"unified_category_probability_{name}" for name in CATEGORIES],
@@ -111,6 +121,8 @@ def sample_metadata(relative):
         return None
     return {
         "path": relative.as_posix(),
+        "dataset": "supported",
+        "food_status": "SUPPORTED",
         "category": category,
         "category_label": CATEGORY_LABELS[category],
         "freshness": freshness,
@@ -120,25 +132,58 @@ def sample_metadata(relative):
     }
 
 
-def index_test_images(test_root):
+def negative_sample_metadata(relative):
+    relative = PurePosixPath(relative)
+    if len(relative.parts) < 2:
+        return None
+    food_status = relative.parts[0]
+    if food_status not in {"UNSUPPORTED", "NON_FOOD"}:
+        return None
+    return {
+        "path": relative.as_posix(),
+        "dataset": "negative",
+        "food_status": food_status,
+        "category": "",
+        "category_label": "",
+        "freshness": "",
+        "freshness_label": "",
+        "product": "",
+        "filename": relative.name,
+    }
+
+
+def index_test_images(test_root, negative_test_root=None):
     test_root = Path(test_root).resolve()
     samples = []
-    if not test_root.is_dir():
-        return samples
     extensions = {suffix.lower() for suffix in IMG_EXTENSIONS}
-    for path in sorted(test_root.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in extensions:
+    sources = [(test_root, sample_metadata)]
+    if negative_test_root is not None:
+        sources.append((Path(negative_test_root).resolve(), negative_sample_metadata))
+    for root, metadata_parser in sources:
+        if not root.is_dir():
             continue
-        relative = path.relative_to(test_root)
-        metadata = sample_metadata(relative.as_posix())
-        if metadata:
-            samples.append(metadata)
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in extensions:
+                continue
+            relative = path.relative_to(root)
+            metadata = metadata_parser(relative.as_posix())
+            if metadata:
+                samples.append(metadata)
     return samples
 
 
 class OnnxRuntimeModel:
-    def __init__(self, model_path):
+    def __init__(self, model_path, manifest_path=None, model_id=None):
         self.model_path = Path(model_path).resolve()
+        self.manifest_path = (
+            False
+            if manifest_path is False
+            else (Path(manifest_path).resolve() if manifest_path else None)
+        )
+        self.model_id = model_id or self.model_path.stem
+        self.display_name = self.model_path.stem
+        self.architecture = "unknown"
+        self.metadata = {}
         self.session = None
         self.error = None
         self.food_gate_ready = False
@@ -146,11 +191,26 @@ class OnnxRuntimeModel:
         self._load_session()
 
     def _load_manifest(self):
-        manifest_path = self.model_path.parent / "manifest.json"
+        if self.manifest_path is False:
+            return
+        manifest_path = self.manifest_path
+        if manifest_path is None:
+            sidecar = self.model_path.with_suffix(".manifest.json")
+            manifest_path = (
+                sidecar if sidecar.is_file() else self.model_path.parent / "manifest.json"
+            )
         if not manifest_path.is_file():
             return
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.metadata = manifest
+            self.model_id = str(manifest.get("artifact_id") or self.model_id)
+            self.display_name = str(
+                manifest.get("display_name")
+                or manifest.get("run_name")
+                or f"{manifest.get('architecture', 'unified')} · {self.model_path.stem}"
+            )
+            self.architecture = str(manifest.get("architecture") or "unknown")
             self.food_gate_ready = bool(manifest.get("food_gate_ready", False))
         except (OSError, ValueError) as error:
             self.error = f"Không đọc được manifest: {error}"
@@ -172,6 +232,22 @@ class OnnxRuntimeModel:
     @property
     def ready(self):
         return self.session is not None
+
+    def descriptor(self):
+        return {
+            "id": self.model_id,
+            "display_name": self.display_name,
+            "architecture": self.architecture,
+            "path": str(self.model_path),
+            "ready": self.ready,
+            "error": self.error,
+            "food_gate_ready": self.food_gate_ready,
+            "run_name": self.metadata.get("run_name"),
+            "training_method": self.metadata.get("training_method"),
+            "selection_metric": self.metadata.get("selection_metric"),
+            "epoch": self.metadata.get("epoch"),
+            "best_epoch": self.metadata.get("best_epoch"),
+        }
 
     def predict_batch(self, paths):
         if not self.ready:
@@ -378,6 +454,57 @@ class LegacyOnnxRuntimeModel:
         }
 
 
+def manifest_for_onnx(path, preferred_path):
+    sidecar = path.with_suffix(".manifest.json")
+    if sidecar.is_file():
+        return sidecar
+    legacy = path.parent / "manifest.json"
+    if not legacy.is_file():
+        return None
+    if path == preferred_path:
+        return legacy
+    try:
+        payload = json.loads(legacy.read_text(encoding="utf-8"))
+        declared = Path(payload.get("onnx", {}).get("path", "")).name
+        return legacy if declared == path.name else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def discover_unified_models(root, preferred_path):
+    root = Path(root).resolve()
+    preferred_path = Path(preferred_path).resolve()
+    paths = set(root.rglob("*.onnx")) if root.is_dir() else set()
+    if preferred_path.is_file():
+        paths.add(preferred_path)
+
+    models = {}
+    default_id = None
+    for path in sorted(paths, key=lambda item: str(item).lower()):
+        try:
+            relative_id = path.relative_to(root).with_suffix("").as_posix()
+        except ValueError:
+            relative_id = path.stem
+        model = OnnxRuntimeModel(
+            path,
+            manifest_for_onnx(path, preferred_path) or False,
+            relative_id,
+        )
+        model_id = model.model_id
+        if model_id in models:
+            model_id = relative_id
+            model.model_id = model_id
+        if model_id in models:
+            raise ValueError(f"Trùng model id trong ONNX registry: {model_id}")
+        models[model_id] = model
+        if path == preferred_path:
+            default_id = model_id
+
+    if default_id is None and models:
+        default_id = next(iter(models))
+    return models, default_id
+
+
 class LocalEvaluationApp:
     def __init__(
         self,
@@ -385,20 +512,39 @@ class LocalEvaluationApp:
         model_path,
         legacy_root=DEFAULT_LEGACY_ROOT,
         report_root=DEFAULT_REPORT_ROOT,
+        negative_test_root=DEFAULT_NEGATIVE_TEST_ROOT,
+        unified_root=DEFAULT_UNIFIED_ROOT,
     ):
         self.test_root = Path(test_root).resolve()
-        self.samples = index_test_images(self.test_root)
+        self.negative_test_root = Path(negative_test_root).resolve()
+        self.sample_roots = {
+            "supported": self.test_root,
+            "negative": self.negative_test_root,
+        }
+        self.samples = index_test_images(
+            self.test_root, self.negative_test_root
+        )
         self.by_path = {sample["path"]: sample for sample in self.samples}
-        self.model = OnnxRuntimeModel(model_path)
+        self.unified_root = Path(unified_root).resolve()
+        self.unified_models, self.default_unified_model_id = discover_unified_models(
+            self.unified_root, model_path
+        )
+        if not self.unified_models:
+            fallback = OnnxRuntimeModel(model_path)
+            self.unified_models[fallback.model_id] = fallback
+            self.default_unified_model_id = fallback.model_id
+        self.model = self.unified_models[self.default_unified_model_id]
         self.legacy_model = LegacyOnnxRuntimeModel(legacy_root)
         self.report_root = Path(report_root).resolve()
 
     def resolve_sample_path(self, relative_path):
         normalized = PurePosixPath(str(relative_path)).as_posix()
-        if normalized not in self.by_path:
+        sample = self.by_path.get(normalized)
+        if sample is None:
             raise FileNotFoundError("Ảnh không thuộc tập test đã lập chỉ mục")
-        target = (self.test_root / Path(*PurePosixPath(normalized).parts)).resolve()
-        if self.test_root not in target.parents or not target.is_file():
+        root = self.sample_roots[sample["dataset"]]
+        target = (root / Path(*PurePosixPath(normalized).parts)).resolve()
+        if root not in target.parents or not target.is_file():
             raise FileNotFoundError("Không tìm thấy ảnh test")
         return target
 
@@ -411,6 +557,20 @@ class LocalEvaluationApp:
         if self.report_root not in target.parents or not target.is_file():
             raise FileNotFoundError("Không tìm thấy report")
         return target
+
+    @staticmethod
+    def validate_model_mode(model_mode):
+        if model_mode not in MODEL_MODES:
+            raise ValueError(
+                f"Model mode không hợp lệ: {model_mode}; chọn {MODEL_MODES}"
+            )
+
+    def unified_model(self, model_id=None):
+        selected_id = model_id or self.default_unified_model_id
+        model = self.unified_models.get(selected_id)
+        if model is None:
+            raise ValueError(f"Không tìm thấy unified ONNX model: {selected_id}")
+        return model
 
     def report_rows(self, filename, offset=0, limit=20):
         path = self.resolve_report_path(filename)
@@ -447,6 +607,7 @@ class LocalEvaluationApp:
         row = {field: "" for field in REPORT_FIELDS}
         row.update({
             "image_path": sample["path"],
+            "truth_food_status": sample["food_status"],
             "truth_category": sample["category"],
             "truth_freshness": sample["freshness"],
             "truth_product": sample["product"],
@@ -455,17 +616,23 @@ class LocalEvaluationApp:
         })
         return row
 
-    def filter_samples(self, category=None, freshness=None):
+    def filter_samples(self, food_status=None, category=None, freshness=None):
         return [
             sample
             for sample in self.samples
-            if (not category or sample["category"] == category)
+            if (not food_status or sample["food_status"] == food_status)
+            and (not category or sample["category"] == category)
             and (not freshness or sample["freshness"] == freshness)
         ]
 
     def status(self):
-        categories = Counter(sample["category"] for sample in self.samples)
-        freshness = Counter(sample["freshness"] for sample in self.samples)
+        food_statuses = Counter(sample["food_status"] for sample in self.samples)
+        categories = Counter(
+            sample["category"] for sample in self.samples if sample["category"]
+        )
+        freshness = Counter(
+            sample["freshness"] for sample in self.samples if sample["freshness"]
+        )
         return {
             "model_ready": self.model.ready,
             "model_error": self.model.error,
@@ -474,13 +641,24 @@ class LocalEvaluationApp:
             "legacy_error": self.legacy_model.error,
             "legacy_root": str(self.legacy_model.root),
             "food_gate_ready": self.model.food_gate_ready,
+            "default_unified_model_id": self.default_unified_model_id,
+            "unified_models": [
+                model.descriptor() for model in self.unified_models.values()
+            ],
             "test_root": str(self.test_root),
+            "negative_test_root": str(self.negative_test_root),
             "test_images": len(self.samples),
             "counts": {
+                "food_status": dict(food_statuses),
                 "category": dict(categories),
                 "freshness": dict(freshness),
             },
             "labels": {
+                "food_statuses": [
+                    {"value": "SUPPORTED", "label": "Thực phẩm được hỗ trợ"},
+                    {"value": "UNSUPPORTED", "label": "Thực phẩm ngoài phạm vi"},
+                    {"value": "NON_FOOD", "label": "Không phải thực phẩm"},
+                ],
                 "categories": [
                     {"value": name, "label": CATEGORY_LABELS[name]}
                     for name in CATEGORIES
@@ -492,31 +670,37 @@ class LocalEvaluationApp:
             },
         }
 
-    def predict(self, relative_path):
+    def predict(self, relative_path, model_mode="both", unified_model_id=None):
+        self.validate_model_mode(model_mode)
         sample = self.by_path.get(relative_path)
         path = self.resolve_sample_path(relative_path)
         result = {"ground_truth": sample}
-        if self.model.ready:
-            prediction = self.model.predict_batch([path])[0]
-            prediction["correct"] = {
-                "category": prediction["category"] == sample["category"],
-                "freshness": prediction["freshness"] == sample["freshness"],
-            }
+        use_unified = model_mode in {"both", "unified"}
+        use_legacy = model_mode in {"both", "legacy"}
+        model = self.unified_model(unified_model_id) if use_unified else None
+        if model is not None and model.ready:
+            prediction = model.predict_batch([path])[0]
+            prediction["model"] = model.descriptor()
+            prediction["correct"] = {}
             if prediction["food_gate_ready"]:
                 prediction["correct"]["food"] = (
-                    prediction["food_status"] == "SUPPORTED"
+                    prediction["food_status"] == sample["food_status"]
                 )
-            prediction["correct"]["joint"] = all(
-                prediction["correct"].values()
-            )
+            if sample["food_status"] == "SUPPORTED":
+                prediction["correct"].update({
+                    "category": prediction["category"] == sample["category"],
+                    "freshness": prediction["freshness"] == sample["freshness"],
+                })
+            evaluable = list(prediction["correct"].values())
+            prediction["correct"]["joint"] = bool(evaluable) and all(evaluable)
             result["unified"] = {"ready": True, "prediction": prediction}
         else:
             result["unified"] = {
                 "ready": False,
-                "error": self.model.error,
+                "error": model.error if model is not None else "Unified không được chọn",
             }
 
-        if self.legacy_model.ready:
+        if use_legacy and self.legacy_model.ready and sample["food_status"] == "SUPPORTED":
             legacy = self.legacy_model.predict_batch(
                 [path], [sample["category"]]
             )[0]
@@ -540,12 +724,27 @@ class LocalEvaluationApp:
         else:
             result["legacy"] = {
                 "ready": False,
-                "error": self.legacy_model.error,
+                "applicable": sample["food_status"] == "SUPPORTED",
+                "error": (
+                    (self.legacy_model.error if use_legacy else "Legacy không được chọn")
+                    if sample["food_status"] == "SUPPORTED"
+                    else "Legacy không có food gate nên không chấm ảnh negative"
+                ),
             }
         return result
 
-    def evaluate(self, category, freshness, limit, seed):
-        candidates = self.filter_samples(category, freshness)
+    def evaluate(
+        self,
+        food_status,
+        category,
+        freshness,
+        limit,
+        seed,
+        model_mode="both",
+        unified_model_id=None,
+    ):
+        self.validate_model_mode(model_mode)
+        candidates = self.filter_samples(food_status, category, freshness)
         if not candidates:
             raise ValueError("Không có ảnh test phù hợp bộ lọc")
         requested = int(limit)
@@ -556,6 +755,17 @@ class LocalEvaluationApp:
 
         unified_counts = Counter()
         legacy_counts = Counter()
+        food_truth_counts = Counter()
+        food_correct_counts = Counter()
+        food_confusion = Counter()
+        supported_total = sum(
+            sample["food_status"] == "SUPPORTED" for sample in selected
+        )
+        use_unified = model_mode in {"both", "unified"}
+        use_legacy = model_mode in {"both", "legacy"}
+        model = self.unified_model(unified_model_id) if use_unified else None
+        if use_legacy and not use_unified and not supported_total:
+            raise ValueError("Legacy không có food gate nên không thể chấm ảnh negative")
         csv_path, summary_path = self._report_paths()
         try:
             with csv_path.open("w", encoding="utf-8-sig", newline="") as stream:
@@ -569,32 +779,44 @@ class LocalEvaluationApp:
                         for sample in batch
                     ]
                     rows = [self._base_report_row(sample) for sample in batch]
-                    if self.model.ready:
-                        outputs = self.model.predict_batch(paths)
+                    if model is not None and model.ready:
+                        outputs = model.predict_batch(paths)
                         for sample, output, row in zip(batch, outputs, rows):
-                            category_correct = (
-                                output["category"] == sample["category"]
-                            )
-                            freshness_correct = (
-                                output["freshness"] == sample["freshness"]
-                            )
-                            food_correct = (
-                                output["food_status"] == "SUPPORTED"
-                                if output["food_gate_ready"]
-                                else True
-                            )
-                            joint_correct = (
-                                category_correct
-                                and freshness_correct
-                                and food_correct
-                            )
-                            unified_counts["category"] += category_correct
-                            unified_counts["freshness"] += freshness_correct
-                            unified_counts["joint"] += joint_correct
+                            is_supported = sample["food_status"] == "SUPPORTED"
+                            category_correct = None
+                            freshness_correct = None
+                            if is_supported:
+                                category_correct = (
+                                    output["category"] == sample["category"]
+                                )
+                                freshness_correct = (
+                                    output["freshness"] == sample["freshness"]
+                                )
+                                unified_counts["category"] += category_correct
+                                unified_counts["freshness"] += freshness_correct
+
+                            food_correct = None
                             if output["food_gate_ready"]:
+                                truth_status = sample["food_status"]
+                                predicted_status = output["food_status"]
+                                food_correct = predicted_status == truth_status
                                 unified_counts["food"] += food_correct
+                                food_truth_counts[truth_status] += 1
+                                food_correct_counts[truth_status] += food_correct
+                                food_confusion[(truth_status, predicted_status)] += 1
+
+                            if is_supported:
+                                joint_correct = category_correct and freshness_correct
+                                if food_correct is not None:
+                                    joint_correct = joint_correct and food_correct
+                            else:
+                                joint_correct = bool(food_correct)
+                            unified_counts["joint"] += joint_correct
                             row.update({
                                 "unified_available": True,
+                                "unified_model_id": model.model_id,
+                                "unified_model_name": model.display_name,
+                                "unified_architecture": model.architecture,
                                 "unified_food_status": output["food_status"],
                                 "unified_food_confidence": output["food_confidence"],
                                 "unified_category": output["category"],
@@ -602,6 +824,7 @@ class LocalEvaluationApp:
                                 "unified_freshness": output["freshness"],
                                 "unified_freshness_confidence": output["freshness_confidence"],
                                 "unified_score": output["estimated_freshness_score"],
+                                "unified_food_correct": food_correct,
                                 "unified_category_correct": category_correct,
                                 "unified_freshness_correct": freshness_correct,
                                 "unified_joint_correct": joint_correct,
@@ -612,11 +835,17 @@ class LocalEvaluationApp:
                                 row[f"unified_category_probability_{name}"] = value
                             for name, value in output["probabilities"]["freshness"].items():
                                 row[f"unified_freshness_probability_{name}"] = value
-                    if self.legacy_model.ready:
+                    if use_legacy and self.legacy_model.ready:
+                        supported_items = [
+                            (sample, path, row)
+                            for sample, path, row in zip(batch, paths, rows)
+                            if sample["food_status"] == "SUPPORTED"
+                        ]
                         outputs = self.legacy_model.predict_batch(
-                            paths, [sample["category"] for sample in batch]
-                        )
-                        for sample, output, row in zip(batch, outputs, rows):
+                            [item[1] for item in supported_items],
+                            [item[0]["category"] for item in supported_items],
+                        ) if supported_items else []
+                        for (sample, _, row), output in zip(supported_items, outputs):
                             pipeline = output["pipeline"]
                             oracle = output["oracle"]
                             category_correct = (
@@ -664,39 +893,74 @@ class LocalEvaluationApp:
             raise
         total = len(selected)
         unified_metrics = None
-        if self.model.ready:
+        if model is not None and model.ready:
+            food_accuracy = (
+                unified_counts["food"] / total
+                if model.food_gate_ready
+                else None
+            )
             unified_metrics = {
-                "category_accuracy": unified_counts["category"] / total,
-                "freshness_accuracy": unified_counts["freshness"] / total,
-                "joint_accuracy": unified_counts["joint"] / total,
-                "supported_recall": (
-                    unified_counts["food"] / total
-                    if self.model.food_gate_ready
-                    else None
+                "food_accuracy": food_accuracy,
+                "food_recall": {
+                    name: (
+                        food_correct_counts[name] / food_truth_counts[name]
+                        if food_truth_counts[name]
+                        else None
+                    )
+                    for name in FOOD_STATUS_CLASSES
+                },
+                "food_confusion_matrix": [
+                    [food_confusion[(truth, predicted)] for predicted in FOOD_STATUS_CLASSES]
+                    for truth in FOOD_STATUS_CLASSES
+                ],
+                "category_accuracy": (
+                    unified_counts["category"] / supported_total
+                    if supported_total else None
                 ),
+                "freshness_accuracy": (
+                    unified_counts["freshness"] / supported_total
+                    if supported_total else None
+                ),
+                "joint_accuracy": unified_counts["joint"] / total,
+                "supported_count": supported_total,
             }
         legacy_metrics = None
-        if self.legacy_model.ready:
+        if use_legacy and self.legacy_model.ready and supported_total:
             legacy_metrics = {
-                "pipeline_category_accuracy": legacy_counts["category"] / total,
-                "pipeline_freshness_accuracy": legacy_counts["freshness"] / total,
-                "pipeline_joint_accuracy": legacy_counts["joint"] / total,
-                "oracle_freshness_accuracy": legacy_counts["oracle"] / total,
+                "pipeline_category_accuracy": legacy_counts["category"] / supported_total,
+                "pipeline_freshness_accuracy": legacy_counts["freshness"] / supported_total,
+                "pipeline_joint_accuracy": legacy_counts["joint"] / supported_total,
+                "oracle_freshness_accuracy": legacy_counts["oracle"] / supported_total,
+                "applicable_count": supported_total,
             }
         result = {
             "sample_count": total,
             "candidate_count": len(candidates),
             "evaluated_all": total == len(candidates),
-            "filters": {"category": category, "freshness": freshness},
+            "filters": {
+                "model_mode": model_mode,
+                "unified_model_id": model.model_id if model is not None else None,
+                "food_status": food_status,
+                "category": category,
+                "freshness": freshness,
+            },
             "models": {
                 "unified": {
                     "ready": unified_metrics is not None,
-                    "error": self.model.error,
+                    "error": model.error if model is not None else "Unified không được chọn",
+                    "model": model.descriptor() if model is not None else None,
                     "metrics": unified_metrics,
                 },
                 "legacy": {
                     "ready": legacy_metrics is not None,
-                    "error": self.legacy_model.error,
+                    "error": (
+                        (self.legacy_model.error if use_legacy else "Legacy không được chọn")
+                        if not (use_legacy and self.legacy_model.ready)
+                        else (
+                            None if supported_total
+                            else "Legacy không áp dụng cho ảnh negative"
+                        )
+                    ),
                     "metrics": legacy_metrics,
                 },
             },
@@ -768,6 +1032,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/random":
                 query = parse_qs(parsed.query)
                 candidates = self.app.filter_samples(
+                    query.get("food_status", [None])[0] or None,
                     query.get("category", [None])[0] or None,
                     query.get("freshness", [None])[0] or None,
                 )
@@ -821,14 +1086,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             payload = json.loads(self.rfile.read(content_length) or b"{}")
             if parsed.path == "/api/predict":
-                self._json(self.app.predict(payload.get("path", "")))
+                self._json(self.app.predict(
+                    payload.get("path", ""),
+                    payload.get("model_mode", "both"),
+                    payload.get("unified_model_id") or None,
+                ))
                 return
             if parsed.path == "/api/evaluate":
                 self._json(self.app.evaluate(
+                    payload.get("food_status") or None,
                     payload.get("category") or None,
                     payload.get("freshness") or None,
                     payload.get("limit", 100),
                     payload.get("seed", 42),
+                    payload.get("model_mode", "both"),
+                    payload.get("unified_model_id") or None,
                 ))
                 return
             self._error(HTTPStatus.NOT_FOUND, "API không tồn tại")
@@ -843,7 +1115,18 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--test-root", type=Path, default=DEFAULT_TEST_ROOT)
+    parser.add_argument(
+        "--negative-test-root",
+        type=Path,
+        default=DEFAULT_NEGATIVE_TEST_ROOT,
+    )
     parser.add_argument("--onnx", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--onnx-root",
+        type=Path,
+        default=DEFAULT_UNIFIED_ROOT,
+        help="Thư mục quét đệ quy các unified ONNX",
+    )
     parser.add_argument(
         "--legacy-root", type=Path, default=DEFAULT_LEGACY_ROOT
     )
@@ -853,7 +1136,12 @@ def main():
     args = parser.parse_args()
 
     app = LocalEvaluationApp(
-        args.test_root, args.onnx, args.legacy_root, args.report_root
+        args.test_root,
+        args.onnx,
+        args.legacy_root,
+        args.report_root,
+        args.negative_test_root,
+        args.onnx_root,
     )
     RequestHandler.app = app
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
@@ -861,11 +1149,15 @@ def main():
     print("WEB SO SÁNH UNIFIED / LEGACY ONNX")
     print(f"  URL       : http://{args.host}:{args.port}")
     print(f"  Test      : {app.test_root} ({len(app.samples)} ảnh)")
-    print(f"  Unified   : {'sẵn sàng' if app.model.ready else 'chưa có'}")
+    print(f"  Negative  : {app.negative_test_root}")
+    print(f"  ONNX root : {app.unified_root}")
+    ready_models = sum(model.ready for model in app.unified_models.values())
+    print(f"  Unified   : {ready_models}/{len(app.unified_models)} model sẵn sàng")
     print(f"  Legacy    : {'sẵn sàng' if app.legacy_model.ready else 'chưa có'}")
     print(f"  Reports   : {app.report_root}")
-    if app.model.error:
-        print(f"  Unified   : {app.model.error}")
+    for model in app.unified_models.values():
+        state = "sẵn sàng" if model.ready else model.error
+        print(f"    - {model.display_name} [{model.model_id}]: {state}")
     if app.legacy_model.error:
         print(f"  Legacy    : {app.legacy_model.error}")
     print("  Dừng      : Ctrl+C")

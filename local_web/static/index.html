@@ -25,6 +25,19 @@
     <div class="workspace">
       <aside class="control-panel panel">
         <div class="section-title"><span>01</span><div><h2>Bộ lọc</h2><p>Chọn lát cắt test set</p></div></div>
+        <label>Chế độ đánh giá
+          <select id="modelFilter">
+            <option value="both" selected>Cả Unified và Legacy</option>
+            <option value="unified">Chỉ Unified</option>
+            <option value="legacy">Chỉ Legacy</option>
+          </select>
+        </label>
+        <label>Unified ONNX model
+          <select id="unifiedModelFilter"><option value="">Đang tìm model…</option></select>
+        </label>
+        <label>Loại ảnh
+          <select id="foodStatusFilter"><option value="">Tất cả loại ảnh</option></select>
+        </label>
         <label>Nhóm thực phẩm
           <select id="categoryFilter"><option value="">Tất cả nhóm</option></select>
         </label>
@@ -65,12 +78,12 @@
           <div class="summary-group">
             <small>Unified</small>
             <strong id="unifiedSummary">Chưa có</strong>
-            <span id="unifiedSubSummary">Category / Freshness / Joint</span>
+            <span id="unifiedSubSummary">Food / Category / Freshness / End-to-end</span>
           </div>
           <div class="summary-group">
             <small>Legacy pipeline</small>
             <strong id="legacySummary">Chưa có</strong>
-            <span id="legacySubSummary">Router / Freshness / Joint</span>
+            <span id="legacySubSummary">Chỉ áp dụng cho SUPPORTED</span>
           </div>
           <div class="summary-group">
             <small>Legacy oracle</small>

@@ -6,3 +6,4 @@ onnx
 onnxscript
 onnxruntime
 ImageHash
+pyarrow

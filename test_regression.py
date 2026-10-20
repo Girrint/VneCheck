@@ -125,6 +125,35 @@ class PreprocessingTests(unittest.TestCase):
 
 
 class UnifiedModelTests(unittest.TestCase):
+    def test_sqrt_inverse_food_weights_follow_class_order(self):
+        try:
+            from food_ai.unified_loss import compute_class_weights
+        except ImportError as error:
+            self.skipTest(f"optional ML dependency unavailable: {error}")
+
+        weights = compute_class_weights(
+            {"SUPPORTED": 66115, "UNSUPPORTED": 3500, "NON_FOOD": 3500},
+            ("SUPPORTED", "UNSUPPORTED", "NON_FOOD"),
+            "sqrt_inverse",
+        )
+
+        self.assertAlmostEqual(float(weights.mean()), 1.0, places=6)
+        self.assertLess(float(weights[0]), float(weights[1]))
+        self.assertAlmostEqual(float(weights[1]), float(weights[2]), places=6)
+
+    def test_food_weights_reject_missing_class(self):
+        try:
+            from food_ai.unified_loss import compute_class_weights
+        except ImportError as error:
+            self.skipTest(f"optional ML dependency unavailable: {error}")
+
+        with self.assertRaises(ValueError):
+            compute_class_weights(
+                {"SUPPORTED": 10},
+                ("SUPPORTED", "UNSUPPORTED", "NON_FOOD"),
+                "sqrt_inverse",
+            )
+
     def test_unified_model_has_three_expected_outputs(self):
         try:
             import torch
@@ -162,6 +191,118 @@ class UnifiedModelTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertEqual(float(components["category"].detach()), 0.0)
         self.assertEqual(float(components["freshness"].detach()), 0.0)
+
+
+class LocalWebNegativeTests(unittest.TestCase):
+    def test_invalid_model_mode_is_rejected(self):
+        from local_web.server import LocalEvaluationApp
+
+        with self.assertRaises(ValueError):
+            LocalEvaluationApp.validate_model_mode("unknown")
+
+    def test_negative_path_maps_to_food_status_only(self):
+        from local_web.server import negative_sample_metadata
+
+        sample = negative_sample_metadata("NON_FOOD/example.jpg")
+
+        self.assertEqual(sample["food_status"], "NON_FOOD")
+        self.assertEqual(sample["dataset"], "negative")
+        self.assertEqual(sample["category"], "")
+        self.assertEqual(sample["freshness"], "")
+
+    def test_mixed_metrics_only_score_category_on_supported(self):
+        import io
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from local_web.server import LocalEvaluationApp
+
+        samples = [
+            {
+                "path": "cu/FRESH/carrot/a.jpg", "dataset": "supported",
+                "food_status": "SUPPORTED", "category": "cu",
+                "freshness": "FRESH", "product": "carrot",
+            },
+            {
+                "path": "UNSUPPORTED/b.jpg", "dataset": "negative",
+                "food_status": "UNSUPPORTED", "category": "",
+                "freshness": "", "product": "",
+            },
+            {
+                "path": "NON_FOOD/c.jpg", "dataset": "negative",
+                "food_status": "NON_FOOD", "category": "",
+                "freshness": "", "product": "",
+            },
+        ]
+        predictions = []
+        for status in ("SUPPORTED", "UNSUPPORTED", "SUPPORTED"):
+            predictions.append({
+                "food_status": status,
+                "food_confidence": 0.9,
+                "food_gate_ready": True,
+                "category": "cu",
+                "category_confidence": 0.9,
+                "freshness": "FRESH",
+                "freshness_confidence": 0.9,
+                "estimated_freshness_score": 9.0,
+                "probabilities": {
+                    "food": {"SUPPORTED": 0.8, "UNSUPPORTED": 0.1, "NON_FOOD": 0.1},
+                    "category": {name: (0.8 if name == "cu" else 0.05) for name in CATEGORIES},
+                    "freshness": {name: (0.8 if name == "FRESH" else 0.1) for name in FRESHNESS_CLASSES},
+                },
+            })
+
+        app = LocalEvaluationApp.__new__(LocalEvaluationApp)
+        app.samples = samples
+        app.by_path = {sample["path"]: sample for sample in samples}
+        app.model = SimpleNamespace(
+            ready=True,
+            error=None,
+            food_gate_ready=True,
+            model_id="test-model",
+            display_name="Test model",
+            architecture="test_arch",
+            descriptor=lambda: {
+                "id": "test-model",
+                "display_name": "Test model",
+                "architecture": "test_arch",
+            },
+            predict_batch=lambda paths: predictions[:len(paths)],
+        )
+        app.unified_model = lambda model_id=None: app.model
+        app.legacy_model = SimpleNamespace(ready=False, error="disabled")
+        app.resolve_sample_path = lambda path: Path(path)
+
+        csv_path = MagicMock()
+        csv_path.name = "test.csv"
+        csv_path.open.return_value.__enter__.return_value = io.StringIO()
+        summary_path = MagicMock()
+        summary_path.name = "test.json"
+        app._report_paths = lambda: (csv_path, summary_path)
+        result = app.evaluate(None, None, None, 0, 42)
+
+        metrics = result["models"]["unified"]["metrics"]
+        self.assertAlmostEqual(metrics["food_accuracy"], 2 / 3)
+        self.assertEqual(metrics["category_accuracy"], 1.0)
+        self.assertEqual(metrics["freshness_accuracy"], 1.0)
+        self.assertEqual(metrics["food_recall"]["NON_FOOD"], 0.0)
+        self.assertEqual(metrics["supported_count"], 1)
+
+
+class UnifiedExportTests(unittest.TestCase):
+    def test_artifact_name_is_filesystem_safe(self):
+        from export_unified_onnx import safe_artifact_name
+
+        self.assertEqual(
+            safe_artifact_name("MobileNet V3 Small / v2"),
+            "MobileNet_V3_Small_v2",
+        )
+
+    def test_empty_artifact_name_is_rejected(self):
+        from export_unified_onnx import safe_artifact_name
+
+        with self.assertRaises(ValueError):
+            safe_artifact_name(" / ")
 
 
 class ManifestTests(unittest.TestCase):

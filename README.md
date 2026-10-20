@@ -103,8 +103,18 @@ python evaluate_unified.py
 python export_unified_onnx.py
 ```
 
+Để giữ nhiều unified ONNX cho A/B test, export checkpoint của từng run bằng
+`--name` khác nhau. Web sẽ tự liệt kê tên, kiến trúc và training method:
+
+```powershell
+python export_unified_onnx.py `
+  --checkpoint runs\<run>\best_model.pth `
+  --name mobilenet_v3_small_v1 `
+  --display-name "MobileNetV3 Small v1"
+```
+
 Web local so sánh unified ONNX với pipeline legacy router → expert trực tiếp
-trên cùng ảnh test:
+trên cùng ảnh test positive và negative:
 
 ```powershell
 python -m local_web.server
@@ -112,7 +122,7 @@ python -m local_web.server
 
 Sau đó mở `http://127.0.0.1:8000`. Web có chế độ xem từng ảnh và đánh giá
 25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc trong
-`data_split/test` bằng ONNX Runtime. Snapshot
+`data_split/test` và `data_negative/test` bằng ONNX Runtime. Snapshot
 legacy mặc định lấy từ `models/legacy/original`; unified chưa export vẫn không
 ảnh hưởng việc đánh giá model cũ. Mỗi lần đánh giá sinh CSV chi tiết từng ảnh
 và JSON metric tổng hợp trong `reports/web_evaluations/`, có nút tải trên web.

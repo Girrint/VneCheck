@@ -16,6 +16,7 @@ htmlcov/
 # Training data and generated artifacts
 data/
 data_split/
+data_negative/
 Dataset/
 models/
 gradcam_history/
@@ -24,6 +25,11 @@ reports/resplit_phash_cache.pkl
 reports/resplit_cluster_summary.csv
 reports/resplit_cluster_members.csv
 reports/resplit_excluded_files.csv
+reports/negative_sha256_cache.pkl
+reports/negative_phash_cache.pkl
+reports/negative_cluster_summary.csv
+reports/negative_cluster_members.csv
+reports/negative_excluded_files.csv
 reports/unified_manifest.csv
 reports/web_evaluations/
 *.pth

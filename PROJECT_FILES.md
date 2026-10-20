@@ -19,7 +19,7 @@
 | `predict_unified.py` | Inference unified một lần forward |
 | `predict_pipeline.py` | Chọn hoặc so sánh legacy/unified |
 | `evaluate_unified.py` | Metric ba head trên unified test manifest |
-| `export_unified_onnx.py` | Export một ONNX có ba output |
+| `export_unified_onnx.py` | Export một hoặc nhiều unified ONNX có sidecar manifest để A/B test |
 | `verify_unified_onnx.py` | So ba output PyTorch và ONNX |
 | `local_web/server.py` | Web local so sánh unified và legacy ONNX trên test set |
 

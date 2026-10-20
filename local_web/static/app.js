@@ -71,19 +71,27 @@ function probabilityBars(values) {
 }
 
 function resultCard(data) {
+  const truthFood = labelFor("food_statuses", data.truth.food_status);
   const truthCategory = labelFor("categories", data.truth.category);
   const truthFreshness = labelFor("freshness", data.truth.freshness);
-  const unified = data.unified?.available ? `
-    <article class="model-card">
-      <div class="model-card-header"><strong>Unified · 1 ONNX</strong><span class="verdict ${data.unified.jointCorrect ? "" : "wrong"}">${data.unified.jointCorrect ? "Đúng" : "Sai"}</span></div>
-      <div class="prediction-grid">
+  const isSupported = data.truth.food_status === "SUPPORTED";
+  const supportedPredictions = isSupported ? `
         <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.unified.category))}</strong><span>${percent(data.unified.categoryConfidence)}</span></div>
         <div class="prediction"><small>Freshness</small><strong>${escapeHtml(labelFor("freshness", data.unified.freshness))}</strong><span>${percent(data.unified.freshnessConfidence)}</span></div>
-        <div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.unified.score)}</strong><span>/ 10</span></div>
+        <div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.unified.score)}</strong><span>/ 10</span></div>` : "";
+  const supportedProbabilities = isSupported ? `
+        <div class="probability-group"><h4>Category probabilities</h4>${probabilityBars(data.unified.categoryProbabilities)}</div>
+        <div class="probability-group"><h4>Freshness probabilities</h4>${probabilityBars(data.unified.freshnessProbabilities)}</div>` : "";
+  const unified = data.unified?.available ? `
+    <article class="model-card">
+      <div class="model-card-header"><strong>${escapeHtml(data.unified.modelName || "Unified")} · ${escapeHtml(data.unified.architecture || "ONNX")}</strong><span class="verdict ${data.unified.jointCorrect ? "" : "wrong"}">${data.unified.jointCorrect ? "Đúng" : "Sai"}</span></div>
+      <div class="prediction-grid">
+        <div class="prediction"><small>Food status</small><strong>${escapeHtml(labelFor("food_statuses", data.unified.foodStatus))}</strong><span>${percent(data.unified.foodConfidence)}</span></div>
+        ${supportedPredictions}
       </div>
       <div class="probabilities">
-        <div class="probability-group"><h4>Category probabilities</h4>${probabilityBars(data.unified.categoryProbabilities)}</div>
-        <div class="probability-group"><h4>Freshness probabilities</h4>${probabilityBars(data.unified.freshnessProbabilities)}</div>
+        <div class="probability-group"><h4>Food status probabilities</h4>${probabilityBars(data.unified.foodProbabilities)}</div>
+        ${supportedProbabilities}
       </div>
     </article>` : `<div class="model-missing">Unified ONNX chưa sẵn sàng.</div>`;
 
@@ -99,13 +107,17 @@ function resultCard(data) {
         <div class="probability-group"><h4>Router probabilities</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
         <div class="probability-group"><h4>Pipeline expert probabilities</h4>${probabilityBars(data.legacy.freshnessProbabilities)}</div>
       </div>
-    </article>` : `<div class="model-missing">Legacy ONNX chưa sẵn sàng.</div>`;
+    </article>` : `<div class="model-missing">${data.legacy?.applicable === false ? "Legacy không có food gate nên không áp dụng cho ảnh negative." : "Legacy ONNX chưa sẵn sàng."}</div>`;
+
+  const truthChips = isSupported
+    ? `<span class="chip">${escapeHtml(truthCategory)}</span><span class="chip">${escapeHtml(truthFreshness)}</span><span class="chip">${escapeHtml(data.truth.product)}</span>`
+    : "";
 
   return `<article class="image-result">
     <div class="sample-column">
       <img class="sample-image" loading="lazy" src="/api/image?path=${encodeURIComponent(data.path)}" alt="Ảnh test ${escapeHtml(data.path)}">
       <p class="sample-path" title="${escapeHtml(data.path)}">${escapeHtml(data.path)}</p>
-      <div class="chips"><span class="chip">Truth: ${escapeHtml(truthCategory)}</span><span class="chip">${escapeHtml(truthFreshness)}</span><span class="chip">${escapeHtml(data.truth.product)}</span></div>
+      <div class="chips"><span class="chip">Truth: ${escapeHtml(truthFood)}</span>${truthChips}</div>
     </div>
     <div class="models-column">${unified}${legacy}</div>
   </article>`;
@@ -115,12 +127,17 @@ function singleToCard(result) {
   const sample = result.ground_truth;
   const unified = result.unified.ready ? {
     available: true,
+    modelName: result.unified.prediction.model?.display_name,
+    architecture: result.unified.prediction.model?.architecture,
+    foodStatus: result.unified.prediction.food_status,
+    foodConfidence: result.unified.prediction.food_confidence,
     category: result.unified.prediction.category,
     categoryConfidence: result.unified.prediction.category_confidence,
     freshness: result.unified.prediction.freshness,
     freshnessConfidence: result.unified.prediction.freshness_confidence,
     score: result.unified.prediction.estimated_freshness_score,
     jointCorrect: result.unified.prediction.correct.joint,
+    foodProbabilities: result.unified.prediction.probabilities.food,
     categoryProbabilities: result.unified.prediction.probabilities.category,
     freshnessProbabilities: result.unified.prediction.probabilities.freshness,
   } : { available: false };
@@ -137,7 +154,7 @@ function singleToCard(result) {
     oracleClassCount: result.legacy.oracle.class_count,
     categoryProbabilities: result.legacy.pipeline.category_probabilities,
     freshnessProbabilities: result.legacy.pipeline.freshness_probabilities,
-  } : { available: false };
+  } : { available: false, applicable: result.legacy.applicable !== false };
   return { path: sample.path, truth: sample, unified, legacy };
 }
 
@@ -145,20 +162,26 @@ function csvToCard(row) {
   const collect = (prefix, names) => Object.fromEntries(names.map((name) => [name, row[`${prefix}${name}`]]).filter(([, value]) => value !== ""));
   return {
     path: row.image_path,
-    truth: { category: row.truth_category, freshness: row.truth_freshness, product: row.truth_product },
+    truth: { food_status: row.truth_food_status, category: row.truth_category, freshness: row.truth_freshness, product: row.truth_product },
     unified: {
       available: booleanValue(row.unified_available),
+      modelName: row.unified_model_name,
+      architecture: row.unified_architecture,
+      foodStatus: row.unified_food_status,
+      foodConfidence: row.unified_food_confidence,
       category: row.unified_category,
       categoryConfidence: row.unified_category_confidence,
       freshness: row.unified_freshness,
       freshnessConfidence: row.unified_freshness_confidence,
       score: row.unified_score,
       jointCorrect: booleanValue(row.unified_joint_correct),
+      foodProbabilities: collect("unified_food_probability_", ["SUPPORTED", "UNSUPPORTED", "NON_FOOD"]),
       categoryProbabilities: collect("unified_category_probability_", ["cu", "gia_cam", "gia_suc", "qua", "rau"]),
       freshnessProbabilities: collect("unified_freshness_probability_", ["FRESH", "HALF-FRESH", "SPOILED"]),
     },
     legacy: {
       available: booleanValue(row.legacy_available),
+      applicable: row.truth_food_status === "SUPPORTED",
       category: row.legacy_router_category,
       categoryConfidence: row.legacy_router_confidence,
       freshness: row.legacy_pipeline_freshness,
@@ -193,6 +216,19 @@ function showCards(cards) {
 async function loadStatus() {
   const status = await api("/api/status");
   state.status = status;
+  const unifiedSelect = $("unifiedModelFilter");
+  unifiedSelect.innerHTML = "";
+  status.unified_models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.id;
+    const method = model.training_method ? ` · ${model.training_method}` : "";
+    option.textContent = `${model.display_name} · ${model.architecture}${method}${model.ready ? "" : " (lỗi)"}`;
+    option.disabled = !model.ready;
+    option.dataset.ready = String(model.ready);
+    unifiedSelect.append(option);
+  });
+  unifiedSelect.value = status.default_unified_model_id || "";
+  fillSelect($("foodStatusFilter"), status.labels.food_statuses);
   fillSelect($("categoryFilter"), status.labels.categories);
   fillSelect($("freshnessFilter"), status.labels.freshness);
   $("datasetSummary").textContent = `${status.test_images.toLocaleString("vi-VN")} ảnh test đã lập chỉ mục`;
@@ -203,6 +239,38 @@ async function loadStatus() {
   card.querySelector("small").textContent = `${status.test_images.toLocaleString("vi-VN")} ảnh test · ONNX Runtime CPU`;
   $("randomButton").disabled = !anyReady;
   $("evaluateButton").disabled = !anyReady;
+  syncControls();
+}
+
+function syncControls() {
+  const negative = ["UNSUPPORTED", "NON_FOOD"].includes($("foodStatusFilter").value);
+  if (negative) {
+    $("categoryFilter").value = "";
+    $("freshnessFilter").value = "";
+  }
+  $("categoryFilter").disabled = negative;
+  $("freshnessFilter").disabled = negative;
+
+  const legacyOption = $("modelFilter").querySelector('option[value="legacy"]');
+  const unifiedOption = $("modelFilter").querySelector('option[value="unified"]');
+  legacyOption.disabled = negative || state.status?.legacy_ready === false;
+  unifiedOption.disabled = !state.status?.unified_models?.some((model) => model.ready);
+  if (legacyOption.disabled && $("modelFilter").value === "legacy") {
+    $("modelFilter").value = "unified";
+  }
+
+  const mode = $("modelFilter").value;
+  const selectedModel = state.status?.unified_models?.find(
+    (model) => model.id === $("unifiedModelFilter").value
+  );
+  $("unifiedModelFilter").disabled = mode === "legacy";
+  const runnable = mode === "unified"
+    ? selectedModel?.ready
+    : mode === "legacy"
+      ? state.status?.legacy_ready && !negative
+      : selectedModel?.ready || (state.status?.legacy_ready && !negative);
+  $("randomButton").disabled = !runnable;
+  $("evaluateButton").disabled = !runnable;
 }
 
 async function evaluateOne() {
@@ -210,12 +278,16 @@ async function evaluateOne() {
   setBusy(button, true, "Đang inference…");
   showLoading("Đang đánh giá một ảnh…", "Ảnh được lấy ngẫu nhiên từ bộ lọc bên trái.");
   try {
-    const query = new URLSearchParams({ category: $("categoryFilter").value, freshness: $("freshnessFilter").value });
+    const query = new URLSearchParams({ food_status: $("foodStatusFilter").value, category: $("categoryFilter").value, freshness: $("freshnessFilter").value });
     const sample = await api(`/api/random?${query}`);
     const result = await api("/api/predict", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: sample.path }),
+      body: JSON.stringify({
+        path: sample.path,
+        model_mode: $("modelFilter").value,
+        unified_model_id: $("unifiedModelFilter").value,
+      }),
     });
     state.reportFile = null;
     $("reportActions").classList.add("hidden");
@@ -233,9 +305,15 @@ async function evaluateOne() {
 function renderSummary(result) {
   $("summaryStrip").classList.remove("hidden");
   const unified = result.models.unified;
-  $("unifiedSummary").textContent = unified.ready ? `${percent(unified.metrics.category_accuracy)} · ${percent(unified.metrics.freshness_accuracy)} · ${percent(unified.metrics.joint_accuracy)}` : "Chưa có model";
+  $("unifiedSummary").textContent = unified.ready ? `${percent(unified.metrics.food_accuracy)} · ${percent(unified.metrics.category_accuracy)} · ${percent(unified.metrics.freshness_accuracy)} · ${percent(unified.metrics.joint_accuracy)}` : "Chưa có model";
+  $("unifiedSubSummary").textContent = unified.ready
+    ? `${unified.model.display_name} · Recall S/U/N: ${percent(unified.metrics.food_recall.SUPPORTED)} · ${percent(unified.metrics.food_recall.UNSUPPORTED)} · ${percent(unified.metrics.food_recall.NON_FOOD)}`
+    : "Food / Category / Freshness / End-to-end";
   const legacy = result.models.legacy;
   $("legacySummary").textContent = legacy.ready ? `${percent(legacy.metrics.pipeline_category_accuracy)} · ${percent(legacy.metrics.pipeline_freshness_accuracy)} · ${percent(legacy.metrics.pipeline_joint_accuracy)}` : "Chưa có model";
+  $("legacySubSummary").textContent = legacy.ready
+    ? `${legacy.metrics.applicable_count.toLocaleString("vi-VN")} ảnh SUPPORTED`
+    : (legacy.error || "Không áp dụng");
   $("oracleSummary").textContent = legacy.ready ? percent(legacy.metrics.oracle_freshness_accuracy) : "Chưa có model";
 }
 
@@ -265,6 +343,9 @@ async function evaluateBatch() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        model_mode: $("modelFilter").value,
+        unified_model_id: $("unifiedModelFilter").value,
+        food_status: $("foodStatusFilter").value,
         category: $("categoryFilter").value,
         freshness: $("freshnessFilter").value,
         limit: Number($("batchSize").value),
@@ -290,6 +371,9 @@ async function evaluateBatch() {
 
 $("randomButton").addEventListener("click", evaluateOne);
 $("evaluateButton").addEventListener("click", evaluateBatch);
+$("foodStatusFilter").addEventListener("change", syncControls);
+$("modelFilter").addEventListener("change", syncControls);
+$("unifiedModelFilter").addEventListener("change", syncControls);
 $("previousPage").addEventListener("click", () => loadReportPage(Math.max(0, state.pageOffset - state.pageSize)).catch((error) => toast(error.message)));
 $("nextPage").addEventListener("click", () => loadReportPage(state.pageOffset + state.pageSize).catch((error) => toast(error.message)));
 loadStatus().catch((error) => toast(error.message));

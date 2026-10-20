@@ -49,6 +49,7 @@ Output:
 
 ```text
 models/unified/food_multitask.onnx
+models/unified/food_multitask.manifest.json
 models/unified/manifest.json
 ```
 
@@ -64,9 +65,28 @@ Export checkpoint hoặc output khác:
 
 ```powershell
 python export_unified_onnx.py `
-  --checkpoint runs\<run_unified>\best.pth `
+  --checkpoint runs\<run_unified>\best_model.pth `
   --output models\unified\food_multitask.onnx
 ```
+
+Giữ nhiều artifact để chọn và so sánh trên web:
+
+```powershell
+python export_unified_onnx.py `
+  --checkpoint runs\<run_unified>\best_model.pth `
+  --name mobilenet_v3_small_v1 `
+  --display-name "MobileNetV3 Small v1"
+```
+
+Lệnh trên tạo:
+
+```text
+models/unified/exports/mobilenet_v3_small_v1.onnx
+models/unified/exports/mobilenet_v3_small_v1.manifest.json
+```
+
+Không dùng lại cùng `--name` nếu muốn giữ artifact cũ. Web tự quét đệ quy
+`models/unified/**/*.onnx`; có thể đổi thư mục bằng `--onnx-root`.
 
 So sánh output PyTorch và ONNX trên một ảnh test:
 
