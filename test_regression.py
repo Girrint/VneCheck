@@ -124,6 +124,46 @@ class PreprocessingTests(unittest.TestCase):
         self.assertEqual(len(test.dataset), 1)
 
 
+class UnifiedModelTests(unittest.TestCase):
+    def test_unified_model_has_three_expected_outputs(self):
+        try:
+            import torch
+            from food_ai.unified_model import create_unified_model
+        except ImportError as error:
+            self.skipTest(f"optional ML dependency unavailable: {error}")
+
+        model = create_unified_model("mobilenet_v3_small", pretrained=False)
+        model.eval()
+        with torch.inference_mode():
+            outputs = model(torch.zeros(2, 3, 224, 224))
+        self.assertEqual(
+            [tuple(output.shape) for output in outputs],
+            [(2, 3), (2, 5), (2, 3)],
+        )
+
+    def test_masked_loss_ignores_missing_category_and_freshness(self):
+        try:
+            import torch
+            from food_ai.unified_loss import MaskedMultiTaskLoss
+        except ImportError as error:
+            self.skipTest(f"optional ML dependency unavailable: {error}")
+
+        outputs = (
+            torch.randn(2, 3, requires_grad=True),
+            torch.randn(2, 5, requires_grad=True),
+            torch.randn(2, 3, requires_grad=True),
+        )
+        targets = {
+            "food_status": torch.tensor([1, 2]),
+            "category": torch.tensor([-100, -100]),
+            "freshness": torch.tensor([-100, -100]),
+        }
+        loss, components = MaskedMultiTaskLoss()(outputs, targets)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertEqual(float(components["category"].detach()), 0.0)
+        self.assertEqual(float(components["freshness"].detach()), 0.0)
+
+
 class ManifestTests(unittest.TestCase):
     def test_manifest_has_required_contract_fields(self):
         manifest_path = Path("models/manifest.json")

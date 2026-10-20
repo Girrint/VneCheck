@@ -24,6 +24,7 @@ reports/resplit_phash_cache.pkl
 reports/resplit_cluster_summary.csv
 reports/resplit_cluster_members.csv
 reports/resplit_excluded_files.csv
+reports/unified_manifest.csv
 *.pth
 *.pt
 *.onnx

@@ -15,6 +15,12 @@
 | `verify_onnx.py` | So output PyTorch và ONNX trên một ảnh |
 | `package_models.py` | Tạo manifest checksum và tùy chọn copy artifact |
 | `test_regression.py` | Regression tests cho contract, split và preprocessing |
+| `train_unified.py` | Train một backbone với ba head đa nhiệm |
+| `predict_unified.py` | Inference unified một lần forward |
+| `predict_pipeline.py` | Chọn hoặc so sánh legacy/unified |
+| `evaluate_unified.py` | Metric ba head trên unified test manifest |
+| `export_unified_onnx.py` | Export một ONNX có ba output |
+| `verify_unified_onnx.py` | So ba output PyTorch và ONNX |
 
 ## Package `food_ai`
 
@@ -24,6 +30,9 @@
 | `data.py` | ImageFolder, transform và DataLoader train/valid/test |
 | `model.py` | Model factory, freeze classifier và load checkpoint |
 | `experiment.py` | Theo dõi run, CSV metric và classification report |
+| `unified_data.py` | Dataset manifest và masked target cho unified model |
+| `unified_model.py` | MobileNetV3 dùng chung backbone và ba head |
+| `unified_loss.py` | Multi-task loss bỏ qua nhãn không áp dụng |
 
 ## Script dữ liệu
 
@@ -32,6 +41,8 @@ Các script dữ liệu hiện tại:
 ```text
 scripts/resplit_dataset.py
 scripts/dataset_stats.py
+scripts/build_unified_manifest.py
+scripts/snapshot_legacy_models.py
 ```
 
 `resplit_dataset.py` đảm nhiệm SHA-256 dedupe, quarantine xung đột nhãn, pHash
@@ -64,3 +75,4 @@ commit vào Git.
 | `MODEL_COMPARISON.md` | Quy trình so sánh model |
 | `LIBRARY_PRINCIPLES.md` | Vai trò các thư viện và nguyên lý ML |
 | `IMPLEMENTATION_REPORT.md` | Báo cáo thay đổi hiện tại |
+| `UNIFIED.md` | Kiến trúc, dữ liệu và lệnh vận hành unified song song |

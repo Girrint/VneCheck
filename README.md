@@ -8,6 +8,10 @@ Hệ thống phân loại ảnh thực phẩm theo hai tầng:
 Model mặc định là MobileNetV3-Large pretrained từ ImageNet. Pipeline hiện dùng
 ba split độc lập trong `data_split/`; không còn lấy một phần train làm test.
 
+Một pipeline unified MobileNetV3-Small đã được thêm song song để thay
+6 ONNX bằng 1 ONNX ba output. Pipeline legacy vẫn là mặc định và đã được
+snapshot để so sánh/rollback. Xem [UNIFIED.md](UNIFIED.md).
+
 ## Trạng thái hiện tại
 
 - Dataset sạch: 94.449 ảnh.
@@ -88,6 +92,15 @@ python -m unittest -v test_regression.py
 
 Có thể dùng `python main.py` nếu muốn thao tác qua menu.
 
+Unified positive baseline:
+
+```powershell
+python scripts\build_unified_manifest.py
+python train_unified.py
+python evaluate_unified.py
+python export_unified_onnx.py
+```
+
 ## Tài liệu
 
 - [DATA.md](DATA.md): cấu trúc, số lượng và cách tạo split.
@@ -96,5 +109,6 @@ Có thể dùng `python main.py` nếu muốn thao tác qua menu.
 - [ALGORITHM.md](ALGORITHM.md): thuật toán dữ liệu, train và inference.
 - [MODEL_COMPARISON.md](MODEL_COMPARISON.md): quy tắc so sánh model.
 - [PROJECT_FILES.md](PROJECT_FILES.md): vai trò từng file còn lại.
+- [UNIFIED.md](UNIFIED.md): pipeline một model chạy song song với legacy.
 
 Kết quả chỉ là ước lượng từ hình ảnh, không thay thế kiểm nghiệm an toàn thực phẩm.

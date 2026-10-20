@@ -72,3 +72,11 @@ model, không phải phép đo vật lý hoặc chứng nhận an toàn thực p
 - Sai router kéo theo chọn sai expert.
 - pHash giảm duplicate leakage nhưng không thay thế group metadata thật.
 - Model hiện có cần được train lại trên `data_split`.
+
+## Kiến trúc unified song song
+
+Pipeline mới không thay pipeline trên. Nó dùng một MobileNetV3-Small backbone
+với ba head food/category/freshness và xuất một ONNX ba output. Các entry point,
+checkpoint và manifest nằm trong namespace `unified`; `predict_pipeline.py`
+chọn `legacy`, `unified` hoặc chạy cả hai để đối chiếu. Chi tiết tại
+[UNIFIED.md](UNIFIED.md).

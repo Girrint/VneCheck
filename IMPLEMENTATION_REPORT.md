@@ -1,6 +1,6 @@
 # Báo cáo hiện trạng triển khai
 
-Ngày cập nhật: 2026-10-18.
+Ngày cập nhật: 2026-10-19.
 
 ## Đã hoàn thành
 
@@ -37,7 +37,7 @@ Ngày cập nhật: 2026-10-18.
 
 ### Dọn dự án
 
-- Chỉ giữ `scripts/resplit_dataset.py` làm công cụ dữ liệu chính.
+- Chỉ giữ các công cụ dữ liệu hiện dùng; loại các phiên bản chia/dedupe cũ.
 - Loại các script cũ dùng để move/delete valid, kiểm tra duplicate riêng lẻ và
   split pHash phiên bản cũ.
 - Loại wrapper inference trùng lặp.
@@ -47,13 +47,24 @@ Ngày cập nhật: 2026-10-18.
 
 ## Việc tiếp theo
 
-1. Train lại router trên `data_split`.
-2. Train lại đủ 5 freshness expert.
+1. Train unified positive baseline bằng `train_unified.py`.
+2. Train lại router và 5 expert legacy trên cùng `data_split` để có baseline
+   so sánh công bằng.
 3. Chọn model bằng validation; không dùng test để tuning.
-4. Chạy router uncertainty và end-to-end evaluation trên test đúng một lần cho
-   cấu hình đã chốt.
-5. Export ONNX, verify sai khác và tạo manifest mới.
-6. Nếu có metadata source/object/session, tạo split group-aware mạnh hơn pHash.
+4. Bổ sung negative data cho `UNSUPPORTED` và `NON_FOOD`, rồi train food head.
+5. So sánh legacy/unified trên test, latency, dung lượng và peak memory.
+6. Export/verify unified ONNX sau khi chốt checkpoint.
+7. Nếu có metadata source/object/session, tạo split group-aware mạnh hơn pHash.
+
+## Unified pipeline song song
+
+- Đã thêm MobileNetV3-Small một backbone với food/category/freshness head.
+- Đã thêm manifest dataset, masked multi-task loss và train/evaluate riêng.
+- Đã thêm inference selector `legacy|unified|both`.
+- Đã thêm export/verify một ONNX ba output.
+- Đã snapshot 12 legacy artifacts kèm SHA-256 tại `models/legacy/original`.
+- Manifest hiện chưa có negative image; food gate được đánh dấu chưa sẵn sàng
+  và food loss tự tắt cho positive baseline.
 
 ## Lưu ý về artifact hiện tại
 
