@@ -21,6 +21,7 @@
 | `evaluate_unified.py` | Metric ba head trên unified test manifest |
 | `export_unified_onnx.py` | Export một ONNX có ba output |
 | `verify_unified_onnx.py` | So ba output PyTorch và ONNX |
+| `local_web/server.py` | Web local so sánh unified và legacy ONNX trên test set |
 
 ## Package `food_ai`
 
@@ -76,3 +77,12 @@ commit vào Git.
 | `LIBRARY_PRINCIPLES.md` | Vai trò các thư viện và nguyên lý ML |
 | `IMPLEMENTATION_REPORT.md` | Báo cáo thay đổi hiện tại |
 | `UNIFIED.md` | Kiến trúc, dữ liệu và lệnh vận hành unified song song |
+| `ONNX.md` | Hướng dẫn export và verify unified/legacy ONNX |
+
+## Web local
+
+`local_web/static/` chứa frontend HTML/CSS/JavaScript. `local_web/server.py`
+phục vụ frontend, ảnh trong `data_split/test` và inference ONNX Runtime. Web
+chạy unified một-model song song với legacy router → expert; chế độ oracle dùng
+category thật để đo riêng expert 2/3 lớp. Server chỉ bind `127.0.0.1` theo mặc
+định và không cho đọc file ngoài test set.

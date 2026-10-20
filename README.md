@@ -76,13 +76,15 @@ python evaluate_router_uncertainty.py
 python evaluate_end_to_end.py
 ```
 
-Export và kiểm tra ONNX:
+Export và kiểm tra ONNX legacy:
 
 ```powershell
 python export_onnx.py
 python verify_onnx.py --image path\to\image.jpg
 python package_models.py --require-onnx
 ```
+
+Hướng dẫn chi tiết cho cả unified và legacy: [ONNX.md](ONNX.md).
 
 Chạy kiểm thử:
 
@@ -101,6 +103,20 @@ python evaluate_unified.py
 python export_unified_onnx.py
 ```
 
+Web local so sánh unified ONNX với pipeline legacy router → expert trực tiếp
+trên cùng ảnh test:
+
+```powershell
+python -m local_web.server
+```
+
+Sau đó mở `http://127.0.0.1:8000`. Web có chế độ xem từng ảnh và đánh giá
+25/100/500/1.000/5.000 hoặc toàn bộ ảnh phù hợp bộ lọc trong
+`data_split/test` bằng ONNX Runtime. Snapshot
+legacy mặc định lấy từ `models/legacy/original`; unified chưa export vẫn không
+ảnh hưởng việc đánh giá model cũ. Mỗi lần đánh giá sinh CSV chi tiết từng ảnh
+và JSON metric tổng hợp trong `reports/web_evaluations/`, có nút tải trên web.
+
 ## Tài liệu
 
 - [DATA.md](DATA.md): cấu trúc, số lượng và cách tạo split.
@@ -110,5 +126,6 @@ python export_unified_onnx.py
 - [MODEL_COMPARISON.md](MODEL_COMPARISON.md): quy tắc so sánh model.
 - [PROJECT_FILES.md](PROJECT_FILES.md): vai trò từng file còn lại.
 - [UNIFIED.md](UNIFIED.md): pipeline một model chạy song song với legacy.
+- [ONNX.md](ONNX.md): export, verify và chạy web với ONNX.
 
 Kết quả chỉ là ước lượng từ hình ảnh, không thay thế kiểm nghiệm an toàn thực phẩm.

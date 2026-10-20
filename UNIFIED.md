@@ -114,3 +114,45 @@ models/unified/manifest.json
 ONNX có một input `image` và ba output logits. Chỉ chuyển app sang unified sau
 khi so sánh category accuracy, freshness macro-F1, recall `SPOILED`, dung lượng,
 latency và peak memory trên cùng `data_split/test`.
+
+## Web local đánh giá ONNX
+
+Sau khi đã export ONNX:
+
+```powershell
+python -m local_web.server
+```
+
+Mở `http://127.0.0.1:8000`. Trang web chỉ lập chỉ mục và phục vụ ảnh từ
+`data_split/test`, cho phép xem một dự đoán hoặc đo accuracy trên
+25/100/500/1.000/5.000 hay toàn bộ ảnh phù hợp bộ lọc. Khi lấy mẫu, seed 42
+giúp kết quả lặp lại. Cùng ảnh được chạy qua snapshot legacy
+`models/legacy/original`: pipeline thật dùng router → expert, còn oracle dùng
+category thật để đo riêng expert 2 lớp hoặc 3 lớp. Unified chưa có vẫn có thể
+đánh giá legacy. Inference dùng ONNX Runtime CPU và tiền xử lý PIL/NumPy tương
+đương eval transform; web không cần load PyTorch model.
+
+Sau mỗi batch, web sinh hai report trong `reports/web_evaluations/`:
+
+- CSV: một dòng cho mỗi ảnh, gồm truth, dự đoán, confidence, đúng/sai, điểm và
+  xác suất từng lớp của unified, legacy pipeline và legacy oracle.
+- JSON: bộ lọc, số ảnh và metric tổng hợp của lần đánh giá.
+
+Hai nút tải xuất hiện ngay dưới kết quả batch.
+
+Giao diện desktop chia hai cột: bộ lọc và điều khiển ở bên trái; metric cùng
+kết quả từng ảnh ở bên phải. Kết quả batch dùng chính kiểu thẻ của chế độ một
+ảnh và đọc từ CSV theo từng trang 20 ảnh, nên có thể duyệt toàn bộ test set mà
+không nạp 14.162 dòng vào trình duyệt cùng lúc.
+
+Có thể đổi cổng hoặc đường dẫn artifact:
+
+```powershell
+python -m local_web.server --port 8080 --onnx models/unified/food_multitask.onnx
+```
+
+Đổi snapshot legacy nếu cần:
+
+```powershell
+python -m local_web.server --legacy-root models/legacy/clean_split
+```

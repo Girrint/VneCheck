@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import torch
@@ -10,8 +11,6 @@ from food_ai.config import (
     CATEGORIES,
     IMAGE_SIZE,
     MODEL_DIR,
-    ROUTER_MODEL,
-    freshness_model,
 )
 from food_ai.model import create_model
 
@@ -37,15 +36,35 @@ def export_checkpoint(source: Path, destination: Path) -> None:
 
 
 def main() -> None:
-    export_checkpoint(ROUTER_MODEL, MODEL_DIR / "router.onnx")
+    parser = argparse.ArgumentParser(
+        description="Export router và 5 freshness expert legacy sang ONNX"
+    )
+    parser.add_argument(
+        "--checkpoint-root",
+        type=Path,
+        default=MODEL_DIR,
+        help="Thư mục chứa router.pth và freshness/*.pth (mặc định: models)",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=MODEL_DIR,
+        help="Thư mục ghi router.onnx và freshness/*.onnx (mặc định: models)",
+    )
+    args = parser.parse_args()
+
+    router_checkpoint = args.checkpoint_root / "router.pth"
+    if not router_checkpoint.is_file():
+        raise FileNotFoundError(f"Thiếu checkpoint router: {router_checkpoint}")
+    export_checkpoint(router_checkpoint, args.output_root / "router.onnx")
 
     for category in CATEGORIES:
-        source = freshness_model(category)
+        source = args.checkpoint_root / "freshness" / f"{category}.pth"
 
         if source.exists():
             export_checkpoint(
                 source,
-                MODEL_DIR / "freshness" / f"{category}.onnx",
+                args.output_root / "freshness" / f"{category}.onnx",
             )
         else:
             print(f"skip missing: {source}")

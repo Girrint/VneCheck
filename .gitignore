@@ -25,6 +25,7 @@ reports/resplit_cluster_summary.csv
 reports/resplit_cluster_members.csv
 reports/resplit_excluded_files.csv
 reports/unified_manifest.csv
+reports/web_evaluations/
 *.pth
 *.pt
 *.onnx

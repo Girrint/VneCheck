@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VneCheck · ONNX Evaluation Lab</title>
+  <meta name="description" content="Đánh giá unified và legacy ONNX trên test set VneCheck">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">VNECHECK / LOCAL MODEL LAB</p>
+        <h1>Đánh giá từng ảnh.<br><em>Hiểu từng quyết định.</em></h1>
+      </div>
+      <div id="modelStatus" class="status-card loading">
+        <span class="status-dot"></span>
+        <div><strong>Đang kết nối</strong><small>Kiểm tra model và test set…</small></div>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="control-panel panel">
+        <div class="section-title"><span>01</span><div><h2>Bộ lọc</h2><p>Chọn lát cắt test set</p></div></div>
+        <label>Nhóm thực phẩm
+          <select id="categoryFilter"><option value="">Tất cả nhóm</option></select>
+        </label>
+        <label>Độ tươi
+          <select id="freshnessFilter"><option value="">Tất cả trạng thái</option></select>
+        </label>
+
+        <button id="randomButton" class="button primary full">Đánh giá 1 ảnh ngẫu nhiên</button>
+
+        <div class="separator"></div>
+        <div class="section-title compact"><span>02</span><div><h2>Đánh giá batch</h2><p>Cùng ảnh cho mọi model</p></div></div>
+        <label>Số ảnh
+          <select id="batchSize">
+            <option value="25">25</option>
+            <option value="100" selected>100</option>
+            <option value="500">500</option>
+            <option value="1000">1.000</option>
+            <option value="5000">5.000</option>
+            <option value="0">Toàn bộ tập đang lọc</option>
+          </select>
+        </label>
+        <button id="evaluateButton" class="button secondary full">Chạy đánh giá batch</button>
+        <p class="control-note">Batch lớn được ghi dần ra CSV. Sau khi hoàn tất, kết quả từng ảnh xuất hiện bên phải theo trang.</p>
+
+        <div id="reportActions" class="report-actions hidden">
+          <a id="downloadCsv" class="button primary" href="#">Tải CSV chi tiết</a>
+          <a id="downloadJson" class="button quiet" href="#">Tải JSON tổng hợp</a>
+        </div>
+      </aside>
+
+      <section class="results-panel panel">
+        <div class="results-heading">
+          <div class="section-title"><span>03</span><div><h2>Kết quả đánh giá</h2><p id="resultContext">Chưa có lần đánh giá</p></div></div>
+          <div id="resultCount" class="result-count">0 ảnh</div>
+        </div>
+
+        <div id="summaryStrip" class="summary-strip hidden">
+          <div class="summary-group">
+            <small>Unified</small>
+            <strong id="unifiedSummary">Chưa có</strong>
+            <span id="unifiedSubSummary">Category / Freshness / Joint</span>
+          </div>
+          <div class="summary-group">
+            <small>Legacy pipeline</small>
+            <strong id="legacySummary">Chưa có</strong>
+            <span id="legacySubSummary">Router / Freshness / Joint</span>
+          </div>
+          <div class="summary-group">
+            <small>Legacy oracle</small>
+            <strong id="oracleSummary">Chưa có</strong>
+            <span>Freshness accuracy</span>
+          </div>
+        </div>
+
+        <div id="emptyState" class="empty-state">
+          <div class="empty-icon">◎</div>
+          <h3>Chưa có ảnh được đánh giá</h3>
+          <p>Dùng bộ lọc bên trái, sau đó đánh giá một ảnh hoặc chạy batch.</p>
+        </div>
+
+        <div id="loadingState" class="loading-state hidden">
+          <span class="spinner"></span>
+          <h3 id="loadingTitle">Đang chạy ONNX…</h3>
+          <p id="loadingText">Giữ trang này mở cho đến khi hoàn tất.</p>
+        </div>
+
+        <div id="resultList" class="result-list hidden"></div>
+
+        <nav id="pagination" class="pagination hidden" aria-label="Phân trang kết quả">
+          <button id="previousPage" class="page-button">← Trang trước</button>
+          <span id="pageInfo">Trang 1 / 1</span>
+          <button id="nextPage" class="page-button">Trang sau →</button>
+        </nav>
+      </section>
+    </div>
+
+    <footer><span>Chỉ dùng để đánh giá kỹ thuật mô hình.</span><span id="datasetSummary"></span></footer>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

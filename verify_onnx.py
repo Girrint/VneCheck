@@ -14,8 +14,6 @@ if hasattr(sys.stdout, "reconfigure"):
 from food_ai.config import (
     CATEGORIES,
     MODEL_DIR,
-    ROUTER_MODEL,
-    freshness_model,
 )
 from food_ai.data import build_transforms
 from food_ai.model import load_checkpoint
@@ -158,6 +156,18 @@ def main():
         required=True,
         help="Ảnh dùng để verify",
     )
+    parser.add_argument(
+        "--checkpoint-root",
+        type=Path,
+        default=MODEL_DIR,
+        help="Thư mục chứa router.pth và freshness/*.pth",
+    )
+    parser.add_argument(
+        "--onnx-root",
+        type=Path,
+        default=MODEL_DIR,
+        help="Thư mục chứa router.onnx và freshness/*.onnx",
+    )
 
     args = parser.parse_args()
 
@@ -173,16 +183,16 @@ def main():
     results.append(
         verify_model(
             "ROUTER",
-            ROUTER_MODEL,
-            MODEL_DIR / "router.onnx",
+            args.checkpoint_root / "router.pth",
+            args.onnx_root / "router.onnx",
             tensor,
         )
     )
 
     for category in CATEGORIES:
 
-        checkpoint = freshness_model(category)
-        onnx_model = MODEL_DIR / "freshness" / f"{category}.onnx"
+        checkpoint = args.checkpoint_root / "freshness" / f"{category}.pth"
+        onnx_model = args.onnx_root / "freshness" / f"{category}.onnx"
 
         results.append(
             verify_model(
