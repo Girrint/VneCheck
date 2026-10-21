@@ -156,6 +156,11 @@ Unified ONNX và nhiều Legacy bundle; chế độ **Cả hai** chạy mọi l�
 cùng tập ảnh.
 Mỗi lượt batch dùng seed mới nên chạy lại sẽ lấy nhóm ảnh khác; seed
 được lưu trong JSON report và trong một lượt không lặp cùng đường dẫn ảnh.
+Kết quả batch còn benchmark tốc độ riêng cho từng model/bundle: thời gian
+ONNX trung bình theo ảnh, P95 theo batch, throughput và dung lượng artifact.
+Phép đo warm-up trước, chạy bằng CPU và loại thời gian đọc/tiền xử lý ảnh;
+Legacy chỉ tính router cùng expert theo route dự đoán, không tính Oracle.
+Đây là số liệu so sánh trên máy đang chạy web, không phải latency điện thoại.
 
 ## Tài liệu
 

@@ -16,10 +16,30 @@ from local_web.server import (
     REPORT_FIELDS,
     preprocess_pil_image,
     sample_metadata,
+    summarize_speed,
 )
 
 
 class LocalWebTests(unittest.TestCase):
+    def test_speed_summary_reports_batch_amortized_latency(self):
+        summary = summarize_speed(
+            [(0.2, 10), (0.3, 10)],
+            artifact_bytes=5 * 1024 * 1024,
+            batch_size=10,
+        )
+
+        self.assertEqual(summary["measured_images"], 20)
+        self.assertEqual(summary["measured_batches"], 2)
+        self.assertEqual(summary["mean_ms_per_image"], 25.0)
+        self.assertEqual(summary["p50_ms_per_image"], 25.0)
+        self.assertEqual(summary["p95_ms_per_image"], 30.0)
+        self.assertEqual(summary["throughput_images_per_second"], 40.0)
+        self.assertEqual(summary["artifact_size_mb"], 5.0)
+        self.assertEqual(
+            summary["latency_basis"],
+            "batch_total_divided_by_image_count",
+        )
+
     def test_numpy_preprocessing_matches_training_eval_transform(self):
         pixels = np.arange(317 * 241 * 3, dtype=np.uint32)
         pixels = (pixels % 256).astype(np.uint8).reshape(241, 317, 3)

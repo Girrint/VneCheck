@@ -5,6 +5,7 @@ import math
 import mimetypes
 import random
 import sys
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -90,6 +91,37 @@ def _softmax(values):
     shifted = values - np.max(values)
     exponentials = np.exp(shifted)
     return exponentials / np.sum(exponentials)
+
+
+def summarize_speed(samples, artifact_bytes, batch_size):
+    """Tổng hợp latency ONNX; mỗi sample là (seconds, image_count)."""
+    valid = [
+        (float(seconds), int(count))
+        for seconds, count in samples
+        if seconds >= 0 and count > 0
+    ]
+    total_images = sum(count for _, count in valid)
+    total_seconds = sum(seconds for seconds, _ in valid)
+    if not valid or total_images == 0 or total_seconds <= 0:
+        return None
+    per_image_ms = np.concatenate([
+        np.full(count, seconds * 1000.0 / count, dtype=np.float64)
+        for seconds, count in valid
+    ])
+    return {
+        "provider": "CPUExecutionProvider",
+        "batch_size": int(batch_size),
+        "measured_images": total_images,
+        "measured_batches": len(valid),
+        "inference_total_ms": round(total_seconds * 1000.0, 3),
+        "mean_ms_per_image": round(total_seconds * 1000.0 / total_images, 3),
+        "p50_ms_per_image": round(float(np.percentile(per_image_ms, 50)), 3),
+        "p95_ms_per_image": round(float(np.percentile(per_image_ms, 95)), 3),
+        "throughput_images_per_second": round(total_images / total_seconds, 3),
+        "artifact_size_mb": round(int(artifact_bytes) / (1024 * 1024), 3),
+        "latency_basis": "batch_total_divided_by_image_count",
+        "excludes": ["image_loading", "preprocessing", "session_initialization"],
+    }
 
 
 def _resize_shorter_side(image, size):
@@ -262,12 +294,35 @@ class OnnxRuntimeModel:
         if not self.ready:
             raise RuntimeError(self.error or "ONNX chưa sẵn sàng")
         inputs = np.stack([preprocess_image(path) for path in paths])
+        return self.predict_inputs(inputs)
+
+    def _run_inputs(self, inputs):
         input_name = self.session.get_inputs()[0].name
-        outputs = self.session.run(None, {input_name: inputs})
+        return self.session.run(None, {input_name: inputs})
+
+    def predict_inputs(self, inputs):
+        outputs = self._run_inputs(inputs)
+        return self._decode_outputs(outputs)
+
+    def _decode_outputs(self, outputs):
         return [
             self._decode(food, category, freshness)
             for food, category, freshness in zip(*outputs)
         ]
+
+    def warmup(self):
+        self._run_inputs(
+            np.zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32)
+        )
+
+    def benchmark_predict_inputs(self, inputs):
+        started = time.perf_counter()
+        outputs = self._run_inputs(inputs)
+        elapsed = time.perf_counter() - started
+        return self._decode_outputs(outputs), elapsed
+
+    def artifact_bytes(self):
+        return self.model_path.stat().st_size
 
     def _decode(self, food_logits, category_logits, freshness_logits):
         food_values = _softmax(food_logits)
@@ -428,6 +483,9 @@ class LegacyOnnxRuntimeModel:
         if not self.ready:
             raise RuntimeError(self.error or "Legacy ONNX chưa sẵn sàng")
         inputs = np.stack([preprocess_image(path) for path in paths])
+        return self.predict_inputs(inputs, truth_categories)
+
+    def predict_inputs(self, inputs, truth_categories):
         router = self._session("router", self.router_path)
         router_logits = self._run(router, inputs)
         router_probabilities = [_softmax(logits) for logits in router_logits]
@@ -506,6 +564,47 @@ class LegacyOnnxRuntimeModel:
                 "oracle": oracle,
             })
         return results
+
+    def warmup(self):
+        inputs = np.zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32)
+        router = self._session("router", self.router_path)
+        self._run(router, inputs)
+        for category in CATEGORIES:
+            expert = self._session(
+                f"freshness/{category}",
+                self.root / "freshness" / f"{category}.onnx",
+            )
+            self._run(expert, inputs)
+
+    def benchmark_inputs(self, inputs):
+        """Đo pipeline triển khai: router và expert theo route dự đoán."""
+        started = time.perf_counter()
+        router = self._session("router", self.router_path)
+        router_logits = self._run(router, inputs)
+        predicted_routes = [
+            self.category_classes[int(np.argmax(logits))]
+            for logits in router_logits
+        ]
+        for category in CATEGORIES:
+            indexes = [
+                index for index, predicted in enumerate(predicted_routes)
+                if predicted == category
+            ]
+            if not indexes:
+                continue
+            expert = self._session(
+                f"freshness/{category}",
+                self.root / "freshness" / f"{category}.onnx",
+            )
+            self._run(expert, inputs[indexes])
+        return time.perf_counter() - started
+
+    def artifact_bytes(self):
+        paths = [self.router_path] + [
+            self.root / "freshness" / f"{category}.onnx"
+            for category in CATEGORIES
+        ]
+        return sum(path.stat().st_size for path in paths)
 
     def _decode_freshness(self, category, logits):
         classes = self.freshness_classes[category]
@@ -1032,15 +1131,42 @@ class LocalEvaluationApp:
             }
             for bundle in legacy
         }
+        benchmark_batch_size = 32
+        unified_speed = {model.model_id: [] for model in unified}
+        legacy_speed = {bundle.bundle_id: [] for bundle in legacy}
+        preprocessing_speed = []
+        for model in unified:
+            if model.ready and hasattr(model, "warmup"):
+                model.warmup()
+        for bundle in legacy:
+            if bundle.ready and hasattr(bundle, "warmup"):
+                bundle.warmup()
         csv_path, summary_path = self._report_paths()
         try:
             with csv_path.open("w", encoding="utf-8-sig", newline="") as stream:
                 writer = csv.DictWriter(stream, fieldnames=REPORT_FIELDS)
                 writer.writeheader()
-                batch_size = 32
+                batch_size = benchmark_batch_size
                 for start in range(0, len(selected), batch_size):
                     batch = selected[start:start + batch_size]
                     paths = [self.resolve_sample_path(sample["path"]) for sample in batch]
+                    needs_shared_inputs = any(
+                        model.ready and hasattr(model, "predict_inputs")
+                        for model in unified
+                    ) or any(
+                        bundle.ready and hasattr(bundle, "predict_inputs")
+                        for bundle in legacy
+                    )
+                    shared_inputs = None
+                    if needs_shared_inputs:
+                        preprocessing_started = time.perf_counter()
+                        shared_inputs = np.stack([
+                            preprocess_image(path) for path in paths
+                        ])
+                        preprocessing_speed.append((
+                            time.perf_counter() - preprocessing_started,
+                            len(paths),
+                        ))
 
                     for model in unified:
                         rows = [
@@ -1052,7 +1178,18 @@ class LocalEvaluationApp:
                         ]
                         if model.ready:
                             stats = unified_stats[model.model_id]
-                            outputs = model.predict_batch(paths)
+                            if shared_inputs is not None and hasattr(model, "benchmark_predict_inputs"):
+                                outputs, elapsed = model.benchmark_predict_inputs(
+                                    shared_inputs
+                                )
+                                unified_speed[model.model_id].append((elapsed, len(paths)))
+                            else:
+                                started = time.perf_counter()
+                                outputs = model.predict_batch(paths)
+                                unified_speed[model.model_id].append((
+                                    time.perf_counter() - started,
+                                    len(paths),
+                                ))
                             for sample, output, row in zip(batch, outputs, rows):
                                 is_supported = sample["food_status"] == "SUPPORTED"
                                 category_correct = None
@@ -1138,10 +1275,31 @@ class LocalEvaluationApp:
                             or bundle.food_gate_ready
                         ]
                         if bundle.ready and applicable_indexes:
-                            outputs = bundle.predict_batch(
-                                [paths[index] for index in applicable_indexes],
-                                [batch[index]["category"] for index in applicable_indexes],
-                            )
+                            applicable_paths = [
+                                paths[index] for index in applicable_indexes
+                            ]
+                            truth_categories = [
+                                batch[index]["category"]
+                                for index in applicable_indexes
+                            ]
+                            if shared_inputs is not None and hasattr(bundle, "benchmark_inputs"):
+                                applicable_inputs = shared_inputs[applicable_indexes]
+                                elapsed = bundle.benchmark_inputs(applicable_inputs)
+                                legacy_speed[bundle.bundle_id].append((
+                                    elapsed, len(applicable_indexes),
+                                ))
+                                outputs = bundle.predict_inputs(
+                                    applicable_inputs, truth_categories
+                                )
+                            else:
+                                started = time.perf_counter()
+                                outputs = bundle.predict_batch(
+                                    applicable_paths, truth_categories
+                                )
+                                legacy_speed[bundle.bundle_id].append((
+                                    time.perf_counter() - started,
+                                    len(applicable_indexes),
+                                ))
                             stats = legacy_stats[bundle.bundle_id]
                             for index, output in zip(applicable_indexes, outputs):
                                 sample = batch[index]
@@ -1228,6 +1386,7 @@ class LocalEvaluationApp:
         unified_results = []
         for model in unified:
             metrics = None
+            performance = None
             if model.ready:
                 stats = unified_stats[model.model_id]
                 metrics = {
@@ -1246,14 +1405,22 @@ class LocalEvaluationApp:
                     "joint_accuracy": stats["counts"]["joint"] / total,
                     "supported_count": supported_total,
                 }
+                if hasattr(model, "artifact_bytes"):
+                    performance = summarize_speed(
+                        unified_speed[model.model_id],
+                        model.artifact_bytes(),
+                        benchmark_batch_size,
+                    )
             unified_results.append({
                 "ready": metrics is not None, "error": model.error,
                 "model": model.descriptor(), "metrics": metrics,
+                "performance": performance,
             })
 
         legacy_results = []
         for bundle in legacy:
             metrics = None
+            performance = None
             applicable_total = total if bundle.food_gate_ready else supported_total
             if bundle.ready and applicable_total:
                 stats = legacy_stats[bundle.bundle_id]
@@ -1287,6 +1454,12 @@ class LocalEvaluationApp:
                     "applicable_count": applicable_total,
                     "supported_count": supported_total,
                 }
+                if hasattr(bundle, "artifact_bytes"):
+                    performance = summarize_speed(
+                        legacy_speed[bundle.bundle_id],
+                        bundle.artifact_bytes(),
+                        benchmark_batch_size,
+                    )
             legacy_results.append({
                 "ready": metrics is not None,
                 "error": bundle.error or (
@@ -1294,7 +1467,22 @@ class LocalEvaluationApp:
                     "Router Legacy 5 lớp cũ không áp dụng cho ảnh negative"
                 ),
                 "bundle": bundle.descriptor(), "metrics": metrics,
+                "performance": performance,
             })
+
+        preprocessing = summarize_speed(
+            preprocessing_speed, 0, benchmark_batch_size
+        )
+        if preprocessing is not None:
+            preprocessing.update({
+                "provider": "PIL/NumPy",
+                "includes": [
+                    "image_loading", "EXIF_transpose", "RGB_conversion",
+                    "resize", "center_crop", "normalization",
+                ],
+            })
+            preprocessing.pop("artifact_size_mb", None)
+            preprocessing.pop("excludes", None)
 
         result = {
             "sample_count": total,
@@ -1309,6 +1497,19 @@ class LocalEvaluationApp:
                 "category": category, "freshness": freshness,
             },
             "models": {"unified": unified_results, "legacy": legacy_results},
+            "benchmark": {
+                "device": "CPU",
+                "provider": "CPUExecutionProvider",
+                "batch_size": benchmark_batch_size,
+                "warmup_runs": 1,
+                "latency_basis": "batch_total_divided_by_image_count",
+                "preprocessing": preprocessing,
+                "notes": [
+                    "Model latency excludes image loading, preprocessing, and session initialization.",
+                    "Legacy latency measures router plus predicted-route experts and excludes oracle evaluation.",
+                    "CPU results are for model comparison on this computer, not phone latency.",
+                ],
+            },
             "reports": {
                 "csv": {"filename": csv_path.name, "url": f"/api/report?file={csv_path.name}"},
                 "summary_json": {"filename": summary_path.name, "url": f"/api/report?file={summary_path.name}"},
