@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VneCheck · ONNX Evaluation Lab</title>
+  <title>VnECheck Model Benchmark</title>
   <meta name="description" content="Đánh giá unified và legacy ONNX trên test set VneCheck">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -14,7 +14,8 @@
     <header class="hero">
       <div>
         <p class="eyebrow">VNECHECK / LOCAL MODEL LAB</p>
-        <h1>Đánh giá từng ảnh.<br><em>Hiểu từng quyết định.</em></h1>
+        <h1>VnECheck Model Benchmark</h1>
+        <p class="hero-subtitle">Đánh giá, so sánh và phân tích hiệu năng các mô hình AI nhận diện và đánh giá độ tươi thực phẩm.</p>
       </div>
       <div id="modelStatus" class="status-card loading">
         <span class="status-dot"></span>
@@ -54,15 +55,8 @@
 
         <div class="separator"></div>
         <div class="section-title compact"><span>02</span><div><h2>Đánh giá batch</h2><p>Cùng ảnh cho mọi model</p></div></div>
-        <label>Số ảnh
-          <select id="batchSize">
-            <option value="25">25</option>
-            <option value="100" selected>100</option>
-            <option value="500">500</option>
-            <option value="1000">1.000</option>
-            <option value="5000">5.000</option>
-            <option value="0">Toàn bộ tập đang lọc</option>
-          </select>
+        <label>Số ảnh (0 = toàn bộ)
+          <input id="batchSize" type="number" min="0" step="1" value="100" inputmode="numeric">
         </label>
         <button id="evaluateButton" class="button secondary full">Chạy đánh giá batch</button>
         <p class="control-note">Mọi model đã chọn chạy trên cùng ảnh. CSV dùng một dòng cho mỗi cặp ảnh × model.</p>
@@ -76,7 +70,16 @@
       <section class="results-panel panel">
         <div class="results-heading">
           <div class="section-title"><span>03</span><div><h2>Kết quả đánh giá</h2><p id="resultContext">Chưa có lần đánh giá</p></div></div>
-          <div id="resultCount" class="result-count">0 ảnh</div>
+          <div class="result-tools">
+            <label>Lọc kết quả model
+              <select id="resultCorrectnessFilter">
+                <option value="all">Tất cả trường hợp</option>
+                <option value="correct">Đánh giá đúng</option>
+                <option value="incorrect">Đánh giá sai</option>
+              </select>
+            </label>
+            <div id="resultCount" class="result-count">0 ảnh</div>
+          </div>
         </div>
 
         <div id="summaryStrip" class="summary-strip hidden">

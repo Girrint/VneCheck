@@ -694,26 +694,58 @@ class LocalEvaluationApp:
             raise ValueError(f"Không tìm thấy legacy ONNX bundle: {selected_id}")
         return bundle
 
-    def report_rows(self, filename, offset=0, limit=20):
+    @staticmethod
+    def _report_row_correctness(row):
+        if str(row.get("evaluation_available", "")).lower() != "true":
+            return None
+        is_legacy = (
+            row.get("evaluation_model_type") == "legacy"
+            or bool(row.get("legacy_bundle_id"))
+        )
+        field = "legacy_joint_correct" if is_legacy else "unified_joint_correct"
+        return str(row.get(field, "")).lower() == "true"
+
+    def report_rows(self, filename, offset=0, limit=20, correctness="all"):
         path = self.resolve_report_path(filename)
         if path.suffix.lower() != ".csv":
-            raise ValueError("Chỉ có thể duyệt từng dòng từ report CSV")
+            raise ValueError("Chỉ có thể duyệt kết quả từ report CSV")
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), 100))
-        rows = []
-        total = 0
+        correctness = str(correctness or "all").lower()
+        if correctness not in {"all", "correct", "incorrect"}:
+            raise ValueError(
+                "Bộ lọc kết quả phải là all, correct hoặc incorrect"
+            )
+        rows_by_image = {}
+        row_total = 0
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
-            for total, row in enumerate(csv.DictReader(stream), start=1):
-                index = total - 1
-                if offset <= index < offset + limit:
-                    rows.append(row)
+            for row in csv.DictReader(stream):
+                row_correct = self._report_row_correctness(row)
+                if correctness != "all" and (
+                    row_correct is None
+                    or row_correct != (correctness == "correct")
+                ):
+                    continue
+                row_total += 1
+                rows_by_image.setdefault(row["image_path"], []).append(row)
+        image_paths = list(rows_by_image)
+        selected_paths = image_paths[offset:offset + limit]
+        rows = [
+            row
+            for image_path in selected_paths
+            for row in rows_by_image[image_path]
+        ]
+        total = len(image_paths)
         return {
             "filename": path.name,
             "offset": offset,
             "limit": limit,
             "total": total,
+            "row_total": row_total,
+            "image_count": len(selected_paths),
+            "correctness": correctness,
             "has_previous": offset > 0,
-            "has_next": offset + len(rows) < total,
+            "has_next": offset + len(selected_paths) < total,
             "rows": rows,
         }
 
@@ -1374,6 +1406,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     filename,
                     query.get("offset", [0])[0],
                     query.get("limit", [20])[0],
+                    query.get("correctness", ["all"])[0],
                 ))
                 return
             if parsed.path == "/":

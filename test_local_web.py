@@ -1,3 +1,5 @@
+import csv
+import io
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -45,6 +47,49 @@ class LocalWebTests(unittest.TestCase):
         app.report_root = Path.cwd() / "reports" / "web_evaluations"
         with self.assertRaises(FileNotFoundError):
             app.resolve_report_path("../private.csv")
+
+    def test_report_rows_paginates_images_and_keeps_models_together(self):
+        stream = io.StringIO()
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=[
+                "image_path", "evaluation_model_id", "evaluation_model_type",
+                "evaluation_available", "unified_joint_correct",
+                "legacy_joint_correct",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows([
+            {"image_path": "a.jpg", "evaluation_model_id": "u1", "evaluation_model_type": "unified", "evaluation_available": True, "unified_joint_correct": True},
+            {"image_path": "b.jpg", "evaluation_model_id": "u1", "evaluation_model_type": "unified", "evaluation_available": True, "unified_joint_correct": False},
+            {"image_path": "a.jpg", "evaluation_model_id": "l1", "evaluation_model_type": "legacy", "evaluation_available": True, "legacy_joint_correct": False},
+            {"image_path": "b.jpg", "evaluation_model_id": "l1", "evaluation_model_type": "legacy", "evaluation_available": True, "legacy_joint_correct": True},
+        ])
+
+        app = LocalEvaluationApp.__new__(LocalEvaluationApp)
+        app.resolve_report_path = lambda filename: Path(filename)
+        with patch("pathlib.Path.open", return_value=io.StringIO(stream.getvalue())):
+            page = app.report_rows("evaluation.csv", offset=0, limit=1)
+
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(page["row_total"], 4)
+        self.assertEqual(page["image_count"], 1)
+        self.assertTrue(page["has_next"])
+        self.assertEqual(
+            [row["evaluation_model_id"] for row in page["rows"]],
+            ["u1", "l1"],
+        )
+
+        with patch("pathlib.Path.open", return_value=io.StringIO(stream.getvalue())):
+            correct = app.report_rows(
+                "evaluation.csv", offset=0, limit=10, correctness="correct"
+            )
+        self.assertEqual(correct["total"], 2)
+        self.assertEqual(correct["row_total"], 2)
+        self.assertEqual(
+            [row["evaluation_model_id"] for row in correct["rows"]],
+            ["u1", "l1"],
+        )
 
     def test_decode_masks_half_fresh_for_two_class_category(self):
         model = OnnxRuntimeModel.__new__(OnnxRuntimeModel)

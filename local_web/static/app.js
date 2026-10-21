@@ -2,9 +2,10 @@ const state = {
   status: null,
   reportFile: null,
   pageOffset: 0,
-  pageSize: 20,
+  pageSize: 10,
   totalRows: 0,
   lastRandomPath: null,
+  pageCards: [],
 };
 const $ = (id) => document.getElementById(id);
 
@@ -104,10 +105,7 @@ function probabilityBars(values) {
     </div>`).join("");
 }
 
-function resultCard(data) {
-  const truthFood = labelFor("food_statuses", data.truth.food_status);
-  const truthCategory = labelFor("categories", data.truth.category);
-  const truthFreshness = labelFor("freshness", data.truth.freshness);
+function modelEvaluationCard(data) {
   const isSupported = data.truth.food_status === "SUPPORTED";
   const supportedPredictions = isSupported && data.unified?.available ? `
     <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.unified.category))}</strong><span>${percent(data.unified.categoryConfidence)}</span></div>
@@ -148,16 +146,54 @@ function resultCard(data) {
       </div>
     </article>` : `<div class="model-missing">${escapeHtml(data.legacy.bundleName || "Legacy")}: ${escapeHtml(data.legacy.error || (data.legacy.applicable === false ? "Không áp dụng cho ảnh negative" : "ONNX chưa sẵn sàng"))}</div>`) : "";
 
+  return `${unified}${legacy}`;
+}
+
+function groupCardsByImage(cards) {
+  const groups = new Map();
+  cards.forEach((card) => {
+    let group = groups.get(card.path);
+    if (!group) {
+      group = {
+        path: card.path,
+        truth: card.truth,
+        evaluations: [],
+      };
+      groups.set(card.path, group);
+    }
+    group.evaluations.push(card);
+  });
+  return [...groups.values()];
+}
+
+function filterCardsByCorrectness(cards) {
+  const filter = $("resultCorrectnessFilter").value;
+  if (filter === "all") return cards;
+  return cards.filter((card) => {
+    const evaluation = card.unified || card.legacy;
+    if (!evaluation?.available) return false;
+    return filter === "correct"
+      ? Boolean(evaluation.jointCorrect)
+      : !Boolean(evaluation.jointCorrect);
+  });
+}
+
+function resultCard(data) {
+  const truthFood = labelFor("food_statuses", data.truth.food_status);
+  const truthCategory = labelFor("categories", data.truth.category);
+  const truthFreshness = labelFor("freshness", data.truth.freshness);
+  const isSupported = data.truth.food_status === "SUPPORTED";
   const truthChips = isSupported
     ? `<span class="chip">${escapeHtml(truthCategory)}</span><span class="chip">${escapeHtml(truthFreshness)}</span><span class="chip">${escapeHtml(data.truth.product)}</span>`
     : "";
+  const evaluations = data.evaluations.map(modelEvaluationCard).join("");
   return `<article class="image-result">
     <div class="sample-column">
       <img class="sample-image" loading="lazy" src="/api/image?path=${encodeURIComponent(data.path)}" alt="Ảnh test ${escapeHtml(data.path)}">
       <p class="sample-path" title="${escapeHtml(data.path)}">${escapeHtml(data.path)}</p>
       <div class="chips"><span class="chip">Truth: ${escapeHtml(truthFood)}</span>${truthChips}</div>
     </div>
-    <div class="models-column">${unified}${legacy}</div>
+    <div class="models-column">${evaluations}</div>
   </article>`;
 }
 
@@ -296,11 +332,14 @@ function showLoading(title, text) {
   $("loadingText").textContent = text;
 }
 
-function showCards(cards) {
+function showCards(cards, remember = true) {
+  if (remember) state.pageCards = cards;
+  const filtered = filterCardsByCorrectness(cards);
+  const groups = groupCardsByImage(filtered);
   $("loadingState").classList.add("hidden");
-  $("emptyState").classList.toggle("hidden", cards.length > 0);
-  $("resultList").innerHTML = cards.map(resultCard).join("");
-  $("resultList").classList.toggle("hidden", cards.length === 0);
+  $("emptyState").classList.toggle("hidden", groups.length > 0);
+  $("resultList").innerHTML = groups.map(resultCard).join("");
+  $("resultList").classList.toggle("hidden", groups.length === 0);
 }
 
 async function loadStatus() {
@@ -426,12 +465,18 @@ function renderSummary(result) {
 
 async function loadReportPage(offset) {
   if (!state.reportFile) return;
-  showLoading("Đang tải kết quả từng model…", "Mỗi dòng report là một cặp ảnh × model.");
-  const query = new URLSearchParams({ file: state.reportFile, offset, limit: state.pageSize });
+  showLoading("Đang tải kết quả theo ảnh…", "Mỗi ảnh hiển thị tất cả model đã chọn cạnh nhau.");
+  const query = new URLSearchParams({
+    file: state.reportFile,
+    offset,
+    limit: state.pageSize,
+    correctness: $("resultCorrectnessFilter").value,
+  });
   const page = await api(`/api/report_rows?${query}`);
   state.pageOffset = page.offset;
   state.totalRows = page.total;
   showCards(page.rows.map(csvToCard));
+  $("resultCount").textContent = `${page.total.toLocaleString("vi-VN")} ảnh · ${page.row_total.toLocaleString("vi-VN")} kết quả`;
   const pageNumber = Math.floor(page.offset / page.limit) + 1;
   const totalPages = Math.max(1, Math.ceil(page.total / page.limit));
   $("pageInfo").textContent = `Trang ${pageNumber} / ${totalPages}`;
@@ -442,7 +487,14 @@ async function loadReportPage(offset) {
 
 async function evaluateBatch() {
   const button = $("evaluateButton");
-  const all = $("batchSize").value === "0";
+  const rawBatchSize = $("batchSize").value.trim();
+  const requested = Number(rawBatchSize);
+  if (!rawBatchSize || !Number.isInteger(requested) || requested < 0) {
+    toast("Số ảnh phải là số nguyên từ 0 trở lên");
+    $("batchSize").focus();
+    return;
+  }
+  const all = requested === 0;
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   setBusy(button, true, all ? "Đang chạy toàn bộ…" : "Đang inference…");
   showLoading(all ? "Đang đánh giá toàn bộ ảnh…" : "Đang đánh giá batch…", "Mọi model được chạy tuần tự trên cùng danh sách ảnh.");
@@ -455,7 +507,7 @@ async function evaluateBatch() {
         food_status: $("foodStatusFilter").value,
         category: $("categoryFilter").value,
         freshness: $("freshnessFilter").value,
-        limit: Number($("batchSize").value),
+        limit: requested,
         seed,
       }),
     });
@@ -484,6 +536,15 @@ $("foodStatusFilter").addEventListener("change", syncControls);
 $("modelFilter").addEventListener("change", syncControls);
 $("unifiedModelFilter").addEventListener("change", syncControls);
 $("legacyBundleFilter").addEventListener("change", syncControls);
+$("resultCorrectnessFilter").addEventListener("change", () => {
+  if (state.reportFile) {
+    loadReportPage(0).catch((error) => toast(error.message));
+    return;
+  }
+  const filtered = filterCardsByCorrectness(state.pageCards);
+  $("resultCount").textContent = `${filtered.length} kết quả model`;
+  showCards(state.pageCards, false);
+});
 $("previousPage").addEventListener("click", () => loadReportPage(Math.max(0, state.pageOffset - state.pageSize)).catch((error) => toast(error.message)));
 $("nextPage").addEventListener("click", () => loadReportPage(state.pageOffset + state.pageSize).catch((error) => toast(error.message)));
 loadStatus().catch((error) => toast(error.message));
