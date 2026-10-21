@@ -76,7 +76,6 @@ select, input[type="number"] { width: 100%; margin-top: 7px; border: 1px solid v
 .summary-group strong { margin: 7px 0 3px; font-size: 19px; }
 .summary-group span { color: var(--muted); font-size: 10px; line-height: 1.55; }
 .summary-group span b { color: var(--ink); }
-.summary-group .speed-metric { color: var(--green); font-weight: 650; }
 .empty-state, .loading-state { min-height: 520px; display: grid; place-content: center; justify-items: center; text-align: center; }
 .empty-icon { color: var(--green); font: 400 64px Georgia, serif; }
 .empty-state h3, .loading-state h3 { margin: 10px 0 6px; font: 600 22px Georgia, serif; }

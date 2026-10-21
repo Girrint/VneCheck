@@ -37,14 +37,10 @@ function percent(value) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
-function speedSummary(performance) {
-  if (!performance) return "Speed —";
+function speedSummary(performance, label, modelName) {
+  if (!performance) return `${label} · ${modelName}: —`;
   const mean = Number(performance.mean_ms_per_image).toFixed(2);
-  const p50 = Number(performance.p50_ms_per_image).toFixed(2);
-  const p95 = Number(performance.p95_ms_per_image).toFixed(2);
-  const throughput = Number(performance.throughput_images_per_second).toFixed(1);
-  const size = Number(performance.artifact_size_mb).toFixed(1);
-  return `Speed ${mean} ms/ảnh · P50 ${p50} ms · P95 ${p95} ms · ${throughput} ảnh/s · ${size} MB`;
+  return `${label} · ${modelName}: ${mean} ms/ảnh`;
 }
 
 function booleanValue(value) {
@@ -456,7 +452,7 @@ function renderSummary(result) {
   const unifiedReady = unified.filter((item) => item.ready);
   $("unifiedSummary").textContent = `${unifiedReady.length}/${unified.length} model`;
   $("unifiedSubSummary").innerHTML = unified.length ? unified.map((item) => item.ready
-    ? `<b>${escapeHtml(item.model.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.category_accuracy)} · Fresh ${percent(item.metrics.freshness_accuracy)} · Joint ${percent(item.metrics.joint_accuracy)}<br><span class="speed-metric">${escapeHtml(speedSummary(item.performance))}</span>`
+    ? `<b>${escapeHtml(item.model.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.category_accuracy)} · Fresh ${percent(item.metrics.freshness_accuracy)} · Joint ${percent(item.metrics.joint_accuracy)}`
     : `<b>${escapeHtml(item.model?.display_name || "Unified")}</b> · ${escapeHtml(item.error || "Không sẵn sàng")}`
   ).join("<br>") : "Không chọn Unified";
 
@@ -464,7 +460,7 @@ function renderSummary(result) {
   const legacyReady = legacy.filter((item) => item.ready);
   $("legacySummary").textContent = `${legacyReady.length}/${legacy.length} bundle`;
   $("legacySubSummary").innerHTML = legacy.length ? legacy.map((item) => item.ready
-    ? `<b>${escapeHtml(item.bundle.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.pipeline_category_accuracy)} · Fresh ${percent(item.metrics.pipeline_freshness_accuracy)} · Joint ${percent(item.metrics.pipeline_joint_accuracy)}<br><span class="speed-metric">${escapeHtml(speedSummary(item.performance))}</span>`
+    ? `<b>${escapeHtml(item.bundle.display_name)}</b> · Food ${percent(item.metrics.food_accuracy)} · Cat ${percent(item.metrics.pipeline_category_accuracy)} · Fresh ${percent(item.metrics.pipeline_freshness_accuracy)} · Joint ${percent(item.metrics.pipeline_joint_accuracy)}`
     : `<b>${escapeHtml(item.bundle?.display_name || "Legacy")}</b> · ${escapeHtml(item.error || "Không áp dụng")}`
   ).join("<br>") : "Không chọn Legacy";
   $("oracleSummary").textContent = legacyReady.length ? `${legacyReady.length} bundle` : "Chưa có";
@@ -473,10 +469,26 @@ function renderSummary(result) {
     : "Freshness accuracy";
   if (result.benchmark) {
     const preprocessing = result.benchmark.preprocessing;
-    $("runtimeSummary").textContent = `CPU · batch ${result.benchmark.batch_size}`;
-    $("runtimeSubSummary").textContent = preprocessing
-      ? `Tiền xử lý ${Number(preprocessing.mean_ms_per_image).toFixed(2)} ms/ảnh · model speed không gồm phần này`
-      : "ONNX Runtime CPU · model speed không gồm đọc/tiền xử lý ảnh";
+    const speedRows = [
+      ...unifiedReady.map((item) => speedSummary(
+        item.performance,
+        "Unified model time",
+        item.model.display_name,
+      )),
+      ...legacyReady.map((item) => speedSummary(
+        item.performance,
+        "Legacy model time",
+        item.bundle.display_name,
+      )),
+    ];
+    $("runtimeSummary").textContent = `${speedRows.length} model · CPU batch ${result.benchmark.batch_size}`;
+    const preprocessingRow = preprocessing
+      ? `Tiền xử lý chung: ${Number(preprocessing.mean_ms_per_image).toFixed(2)} ms/ảnh`
+      : "Tiền xử lý chung: —";
+    $("runtimeSubSummary").innerHTML = [
+      ...speedRows.map((row) => escapeHtml(row)),
+      escapeHtml(preprocessingRow),
+    ].join("<br>");
   } else {
     $("runtimeSummary").textContent = "Chưa có";
     $("runtimeSubSummary").textContent = "ONNX Runtime CPU · không gồm đọc và tiền xử lý ảnh";
