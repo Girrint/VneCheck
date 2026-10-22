@@ -111,18 +111,25 @@ function probabilityBars(values) {
     </div>`).join("");
 }
 
+function verdictBadge(value) {
+  if (value === null || value === undefined) {
+    return '<span class="verdict neutral">Chưa đối chiếu</span>';
+  }
+  return `<span class="verdict ${value ? "" : "wrong"}">${value ? "Đúng" : "Sai"}</span>`;
+}
+
 function modelEvaluationCard(data) {
-  const isSupported = data.truth.food_status === "SUPPORTED";
-  const supportedPredictions = isSupported && data.unified?.available ? `
+  const unifiedSupported = data.unified?.foodStatus === "SUPPORTED";
+  const supportedPredictions = unifiedSupported && data.unified?.available ? `
     <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.unified.category))}</strong><span>${percent(data.unified.categoryConfidence)}</span></div>
     <div class="prediction"><small>Freshness</small><strong>${escapeHtml(labelFor("freshness", data.unified.freshness))}</strong><span>${percent(data.unified.freshnessConfidence)}</span></div>
     <div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.unified.score)}</strong><span>/ 10</span></div>` : "";
-  const supportedProbabilities = isSupported && data.unified?.available ? `
+  const supportedProbabilities = unifiedSupported && data.unified?.available ? `
     <div class="probability-group"><h4>Category probabilities</h4>${probabilityBars(data.unified.categoryProbabilities)}</div>
     <div class="probability-group"><h4>Freshness probabilities</h4>${probabilityBars(data.unified.freshnessProbabilities)}</div>` : "";
   const unified = data.unified ? (data.unified.available ? `
     <article class="model-card">
-      <div class="model-card-header"><strong>${escapeHtml(data.unified.modelName || "Unified")} · ${escapeHtml(data.unified.architecture || "ONNX")}</strong><span class="verdict ${data.unified.jointCorrect ? "" : "wrong"}">${data.unified.jointCorrect ? "Đúng" : "Sai"}</span></div>
+      <div class="model-card-header"><strong>${escapeHtml(data.unified.modelName || "Unified")} · ${escapeHtml(data.unified.architecture || "ONNX")}</strong>${verdictBadge(data.unified.jointCorrect)}</div>
       <div class="prediction-grid">
         <div class="prediction"><small>Food status</small><strong>${escapeHtml(labelFor("food_statuses", data.unified.foodStatus))}</strong><span>${percent(data.unified.foodConfidence)}</span></div>
         ${supportedPredictions}
@@ -140,14 +147,14 @@ function modelEvaluationCard(data) {
         <div class="prediction"><small>Oracle expert</small><strong>${escapeHtml(labelFor("freshness", data.legacy.oracleFreshness))}</strong><span>${data.legacy.oracleCorrect ? "Đúng" : "Sai"} · ${escapeHtml(data.legacy.oracleClassCount)} lớp</span></div>` : "";
   const legacy = data.legacy ? (data.legacy.available ? `
     <article class="model-card">
-      <div class="model-card-header"><strong>${escapeHtml(data.legacy.bundleName || "Legacy")} · ${escapeHtml(data.legacy.routerArchitecture || "router")} → expert</strong><span class="verdict ${data.legacy.jointCorrect ? "" : "wrong"}">${data.legacy.jointCorrect ? "Đúng" : "Sai"}</span></div>
+      <div class="model-card-header"><strong>${escapeHtml(data.legacy.bundleName || "Legacy")} · ${escapeHtml(data.legacy.routerArchitecture || "router")} → expert</strong>${verdictBadge(data.legacy.jointCorrect)}</div>
       <div class="prediction-grid">
         <div class="prediction"><small>Food status</small><strong>${escapeHtml(labelFor("food_statuses", data.legacy.foodStatus))}</strong><span>${percent(data.legacy.foodConfidence)}</span></div>
         ${legacyPipeline}${legacyOracle}
       </div>
       <div class="probabilities">
         <div class="probability-group"><h4>Food status probabilities</h4>${probabilityBars(data.legacy.foodProbabilities)}</div>
-        <div class="probability-group"><h4>Router 7 lớp</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
+        <div class="probability-group"><h4>Router probabilities</h4>${probabilityBars(data.legacy.categoryProbabilities)}</div>
         ${data.legacy.freshness ? `<div class="probability-group"><h4>Pipeline expert probabilities</h4>${probabilityBars(data.legacy.freshnessProbabilities)}</div>` : ""}
       </div>
     </article>` : `<div class="model-missing">${escapeHtml(data.legacy.bundleName || "Legacy")}: ${escapeHtml(data.legacy.error || (data.legacy.applicable === false ? "Không áp dụng cho ảnh negative" : "ONNX chưa sẵn sàng"))}</div>`) : "";
@@ -178,6 +185,7 @@ function filterCardsByCorrectness(cards) {
   return cards.filter((card) => {
     const evaluation = card.unified || card.legacy;
     if (!evaluation?.available) return false;
+    if (evaluation.jointCorrect === null || evaluation.jointCorrect === undefined) return false;
     return filter === "correct"
       ? Boolean(evaluation.jointCorrect)
       : !Boolean(evaluation.jointCorrect);
@@ -185,6 +193,7 @@ function filterCardsByCorrectness(cards) {
 }
 
 function resultCard(data) {
+  const hasTruth = data.truth.has_truth !== false && Boolean(data.truth.food_status);
   const truthFood = labelFor("food_statuses", data.truth.food_status);
   const truthCategory = labelFor("categories", data.truth.category);
   const truthFreshness = labelFor("freshness", data.truth.freshness);
@@ -192,12 +201,16 @@ function resultCard(data) {
   const truthChips = isSupported
     ? `<span class="chip">${escapeHtml(truthCategory)}</span><span class="chip">${escapeHtml(truthFreshness)}</span><span class="chip">${escapeHtml(data.truth.product)}</span>`
     : "";
+  const truthSummary = hasTruth
+    ? `<span class="chip">Truth: ${escapeHtml(truthFood)}</span>${truthChips}`
+    : '<span class="chip neutral-chip">Ảnh ngoài test · không có nhãn thật</span>';
+  const displayName = data.truth.filename || data.path;
   const evaluations = data.evaluations.map(modelEvaluationCard).join("");
   return `<article class="image-result">
     <div class="sample-column">
-      <img class="sample-image" loading="lazy" src="/api/image?path=${encodeURIComponent(data.path)}" alt="Ảnh test ${escapeHtml(data.path)}">
-      <p class="sample-path" title="${escapeHtml(data.path)}">${escapeHtml(data.path)}</p>
-      <div class="chips"><span class="chip">Truth: ${escapeHtml(truthFood)}</span>${truthChips}</div>
+      <img class="sample-image" loading="lazy" src="/api/image?path=${encodeURIComponent(data.path)}" alt="Ảnh ${escapeHtml(displayName)}">
+      <p class="sample-path" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</p>
+      <div class="chips">${truthSummary}</div>
     </div>
     <div class="models-column">${evaluations}</div>
   </article>`;
@@ -403,6 +416,7 @@ function syncControls() {
       ? legacyCount > 0
       : unifiedCount + legacyCount > 0;
   $("randomButton").disabled = !runnable;
+  $("uploadButton").disabled = !runnable;
   $("evaluateButton").disabled = !runnable;
 }
 
@@ -438,6 +452,48 @@ async function evaluateOne() {
     $("summaryStrip").classList.add("hidden");
     $("resultContext").textContent = "Một ảnh · tất cả model đã chọn";
     $("resultCount").textContent = `${cards.length} kết quả model`;
+    showCards(cards);
+  } catch (error) {
+    toast(error.message);
+    $("loadingState").classList.add("hidden");
+    $("emptyState").classList.remove("hidden");
+  } finally { setBusy(button, false); }
+}
+
+async function evaluateUploads() {
+  const input = $("uploadImages");
+  const files = [...input.files];
+  if (!files.length) {
+    toast("Hãy chọn ít nhất một ảnh từ máy");
+    input.focus();
+    return;
+  }
+  if (files.length > 20) {
+    toast("Mỗi lần chỉ được chọn tối đa 20 ảnh");
+    input.focus();
+    return;
+  }
+  const button = $("uploadButton");
+  setBusy(button, true, "Đang tải và inference…");
+  showLoading("Đang đánh giá ảnh ngoài test…", "Ảnh được chạy qua tất cả model đã chọn và không dùng để tính accuracy.");
+  try {
+    const selection = selectedPayload();
+    const form = new FormData();
+    files.forEach((file) => form.append("images", file, file.name));
+    form.append("model_mode", selection.model_mode);
+    form.append("unified_model_ids", JSON.stringify(selection.unified_model_ids));
+    form.append("legacy_bundle_ids", JSON.stringify(selection.legacy_bundle_ids));
+    const result = await api("/api/upload_predict", {
+      method: "POST",
+      body: form,
+    });
+    const cards = result.results.flatMap(singleToCards);
+    state.reportFile = null;
+    $("reportActions").classList.add("hidden");
+    $("summaryStrip").classList.add("hidden");
+    $("resultCorrectnessFilter").value = "all";
+    $("resultContext").textContent = `${result.image_count} ảnh ngoài test · không tính accuracy`;
+    $("resultCount").textContent = `${result.image_count} ảnh · ${cards.length} kết quả model`;
     showCards(cards);
   } catch (error) {
     toast(error.message);
@@ -563,6 +619,13 @@ async function evaluateBatch() {
 }
 
 $("randomButton").addEventListener("click", evaluateOne);
+$("uploadButton").addEventListener("click", evaluateUploads);
+$("uploadImages").addEventListener("change", () => {
+  const files = [...$("uploadImages").files];
+  $("uploadSelection").textContent = files.length
+    ? `${files.length} ảnh · ${files.map((file) => file.name).join(", ")}`
+    : "Chưa chọn ảnh";
+});
 $("evaluateButton").addEventListener("click", evaluateBatch);
 $("foodStatusFilter").addEventListener("change", syncControls);
 $("modelFilter").addEventListener("change", syncControls);

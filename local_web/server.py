@@ -1,14 +1,18 @@
 import argparse
 import csv
+import io
 import json
 import math
 import mimetypes
 import random
+import shutil
 import sys
 import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -52,6 +56,9 @@ DEFAULT_LEGACY_REGISTRY_ROOT = PROJECT_ROOT / "models" / "legacy"
 DEFAULT_LEGACY_ROOT = PROJECT_ROOT / "models" / "legacy" / "original"
 DEFAULT_REPORT_ROOT = PROJECT_ROOT / "reports" / "web_evaluations"
 MODEL_MODES = ("both", "unified", "legacy")
+MAX_UPLOAD_FILES = 20
+MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_REQUEST_BYTES = 100 * 1024 * 1024
 
 REPORT_FIELDS = [
     "image_path", "truth_food_status", "truth_category", "truth_freshness",
@@ -163,6 +170,7 @@ def sample_metadata(relative):
     return {
         "path": relative.as_posix(),
         "dataset": "supported",
+        "has_truth": True,
         "food_status": "SUPPORTED",
         "category": category,
         "category_label": CATEGORY_LABELS[category],
@@ -183,6 +191,7 @@ def negative_sample_metadata(relative):
     return {
         "path": relative.as_posix(),
         "dataset": "negative",
+        "has_truth": True,
         "food_status": food_status,
         "category": "",
         "category_label": "",
@@ -723,10 +732,17 @@ class LocalEvaluationApp:
     ):
         self.test_root = Path(test_root).resolve()
         self.negative_test_root = Path(negative_test_root).resolve()
+        self.report_root = Path(report_root).resolve()
+        self.report_root.mkdir(parents=True, exist_ok=True)
         self.sample_roots = {
             "supported": self.test_root,
             "negative": self.negative_test_root,
         }
+        self.upload_root = (
+            self.report_root / ".uploads" / uuid.uuid4().hex
+        ).resolve()
+        self.upload_root.mkdir(parents=True, exist_ok=True)
+        self.sample_roots["upload"] = self.upload_root
         self.samples = index_test_images(
             self.test_root, self.negative_test_root
         )
@@ -749,7 +765,6 @@ class LocalEvaluationApp:
             self.legacy_models[fallback.bundle_id] = fallback
             self.default_legacy_bundle_id = fallback.bundle_id
         self.legacy_model = self.legacy_models[self.default_legacy_bundle_id]
-        self.report_root = Path(report_root).resolve()
 
     def resolve_sample_path(self, relative_path):
         normalized = PurePosixPath(str(relative_path)).as_posix()
@@ -762,6 +777,42 @@ class LocalEvaluationApp:
             raise FileNotFoundError("Không tìm thấy ảnh test")
         return target
 
+    def register_upload(self, filename, content):
+        if not filename:
+            raise ValueError("Ảnh tải lên không có tên file")
+        if not content:
+            raise ValueError(f"Ảnh {filename} rỗng")
+        if len(content) > MAX_UPLOAD_FILE_BYTES:
+            raise ValueError(f"Ảnh {filename} vượt quá giới hạn 10 MB")
+        safe_name = Path(filename).name
+        suffix = Path(safe_name).suffix.lower()
+        if suffix not in {item.lower() for item in IMG_EXTENSIONS}:
+            raise ValueError(f"Định dạng ảnh không được hỗ trợ: {safe_name}")
+        try:
+            with Image.open(io.BytesIO(content)) as image:
+                image.verify()
+        except Exception as error:
+            raise ValueError(f"File không phải ảnh hợp lệ: {safe_name}") from error
+
+        relative = PurePosixPath("upload") / f"{uuid.uuid4().hex}{suffix}"
+        target = self.upload_root / Path(*relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        sample = {
+            "path": relative.as_posix(),
+            "dataset": "upload",
+            "has_truth": False,
+            "food_status": "",
+            "category": "",
+            "category_label": "",
+            "freshness": "",
+            "freshness_label": "",
+            "product": "",
+            "filename": safe_name,
+        }
+        self.by_path[sample["path"]] = sample
+        return sample
+
     def resolve_report_path(self, filename):
         if not filename or Path(filename).name != filename:
             raise FileNotFoundError("Tên report không hợp lệ")
@@ -771,6 +822,9 @@ class LocalEvaluationApp:
         if self.report_root not in target.parents or not target.is_file():
             raise FileNotFoundError("Không tìm thấy report")
         return target
+
+    def close(self):
+        shutil.rmtree(self.upload_root, ignore_errors=True)
 
     @staticmethod
     def validate_model_mode(model_mode):
@@ -975,21 +1029,29 @@ class LocalEvaluationApp:
         prediction = model.predict_batch([path])[0]
         prediction["model"] = model.descriptor()
         prediction["correct"] = {}
-        if prediction["food_gate_ready"]:
+        has_truth = sample.get("has_truth", True)
+        if has_truth and prediction["food_gate_ready"]:
             prediction["correct"]["food"] = prediction["food_status"] == sample["food_status"]
-        if sample["food_status"] == "SUPPORTED":
+        if has_truth and sample["food_status"] == "SUPPORTED":
             prediction["correct"].update({
                 "category": prediction["category"] == sample["category"],
                 "freshness": prediction["freshness"] == sample["freshness"],
             })
         evaluable = list(prediction["correct"].values())
-        prediction["correct"]["joint"] = bool(evaluable) and all(evaluable)
+        prediction["correct"]["joint"] = (
+            all(evaluable) if evaluable else None
+        )
         return {"ready": True, "model": model.descriptor(), "prediction": prediction}
 
     @staticmethod
     def _score_legacy_prediction(bundle, path, sample):
         descriptor = bundle.descriptor()
-        if sample["food_status"] != "SUPPORTED" and not bundle.food_gate_ready:
+        has_truth = sample.get("has_truth", True)
+        if (
+            has_truth
+            and sample["food_status"] != "SUPPORTED"
+            and not bundle.food_gate_ready
+        ):
             return {
                 "ready": False, "applicable": False, "bundle": descriptor,
                 "error": "Router Legacy 5 lớp cũ không chấm được ảnh negative",
@@ -1001,9 +1063,13 @@ class LocalEvaluationApp:
         oracle = legacy["oracle"]
         food_correct = (
             legacy["food_status"] == sample["food_status"]
-            if bundle.food_gate_ready else None
+            if has_truth and bundle.food_gate_ready else None
         )
-        if pipeline is not None and sample["food_status"] == "SUPPORTED":
+        if (
+            has_truth
+            and pipeline is not None
+            and sample["food_status"] == "SUPPORTED"
+        ):
             pipeline["correct"] = {
                 "category": pipeline["category"] == sample["category"],
                 "freshness": pipeline["freshness"] == sample["freshness"],
@@ -1012,15 +1078,17 @@ class LocalEvaluationApp:
                 all(pipeline["correct"].values())
                 and (food_correct is not False)
             )
-        if oracle is not None:
+        if has_truth and oracle is not None:
             oracle["correct"] = {
                 "freshness": oracle["freshness"] == sample["freshness"]
             }
-        joint_correct = (
-            bool(food_correct)
-            if sample["food_status"] != "SUPPORTED"
-            else bool(pipeline and pipeline["correct"]["joint"])
-        )
+        joint_correct = None
+        if has_truth:
+            joint_correct = (
+                bool(food_correct)
+                if sample["food_status"] != "SUPPORTED"
+                else bool(pipeline and pipeline["correct"]["joint"])
+            )
         return {
             "ready": True, "applicable": True, "bundle": descriptor,
             "food_status": legacy["food_status"],
@@ -1066,6 +1134,36 @@ class LocalEvaluationApp:
             "ready": False, "error": "Legacy không được chọn"
         }
         return result
+
+    def predict_uploads(
+        self,
+        files,
+        model_mode="both",
+        unified_model_ids=None,
+        legacy_bundle_ids=None,
+    ):
+        if not files:
+            raise ValueError("Hãy chọn ít nhất một ảnh")
+        if len(files) > MAX_UPLOAD_FILES:
+            raise ValueError(
+                f"Chỉ được tải tối đa {MAX_UPLOAD_FILES} ảnh mỗi lần"
+            )
+        samples = [
+            self.register_upload(filename, content)
+            for filename, content in files
+        ]
+        return {
+            "image_count": len(samples),
+            "results": [
+                self.predict(
+                    sample["path"],
+                    model_mode=model_mode,
+                    unified_model_ids=unified_model_ids,
+                    legacy_bundle_ids=legacy_bundle_ids,
+                )
+                for sample in samples
+            ],
+        }
 
     @staticmethod
     def _model_row(sample, model_type, model_id, name, architecture, ready, applicable=True, error=None):
@@ -1563,6 +1661,46 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def _multipart_upload(self, content_length):
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("multipart/form-data"):
+            raise ValueError("Upload phải dùng multipart/form-data")
+        body = self.rfile.read(content_length)
+        envelope = BytesParser(policy=policy.default).parsebytes(
+            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")
+        )
+        boundary = envelope.get_boundary()
+        if not boundary:
+            raise ValueError("Multipart upload thiếu boundary")
+        delimiter = b"--" + boundary.encode("ascii")
+        fields = {}
+        files = []
+        for raw_part in body.split(delimiter)[1:]:
+            raw_part = raw_part.lstrip(b"\r\n")
+            if not raw_part or raw_part.startswith(b"--"):
+                continue
+            header_bytes, separator, content = raw_part.partition(b"\r\n\r\n")
+            if not separator:
+                raise ValueError("Multipart upload có part không hợp lệ")
+            content = content.removesuffix(b"\r\n")
+            part = BytesParser(policy=policy.default).parsebytes(
+                header_bytes + b"\r\n\r\n"
+            )
+            name = part.get_param("name", header="content-disposition")
+            filename = part.get_filename()
+            if (
+                name == "images"
+                or filename
+                or part.get_content_maintype() == "image"
+            ):
+                fallback_suffix = mimetypes.guess_extension(
+                    part.get_content_type()
+                ) or ".img"
+                files.append((filename or f"upload{fallback_suffix}", content))
+            elif name:
+                fields[name] = content.decode("utf-8", errors="strict")
+        return fields, files
+
     def do_GET(self):
         parsed = urlparse(self.path)
         try:
@@ -1628,6 +1766,30 @@ class RequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
+            if parsed.path == "/api/upload_predict":
+                if content_length > MAX_UPLOAD_REQUEST_BYTES:
+                    self._error(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "Tổng dung lượng upload vượt quá 100 MB",
+                    )
+                    return
+                fields, files = self._multipart_upload(content_length)
+                try:
+                    unified_ids = json.loads(
+                        fields.get("unified_model_ids", "[]")
+                    )
+                    legacy_ids = json.loads(
+                        fields.get("legacy_bundle_ids", "[]")
+                    )
+                except json.JSONDecodeError as error:
+                    raise ValueError("Danh sách model upload không hợp lệ") from error
+                self._json(self.app.predict_uploads(
+                    files,
+                    fields.get("model_mode", "both"),
+                    unified_ids,
+                    legacy_ids,
+                ))
+                return
             if content_length > 64 * 1024:
                 self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request quá lớn")
                 return
@@ -1730,6 +1892,7 @@ def main():
         print("\nĐã dừng web local.")
     finally:
         server.server_close()
+        app.close()
 
 
 if __name__ == "__main__":

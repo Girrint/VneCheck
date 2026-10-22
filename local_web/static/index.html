@@ -54,7 +54,16 @@
         <button id="randomButton" class="button primary full">Đánh giá 1 ảnh ngẫu nhiên</button>
 
         <div class="separator"></div>
-        <div class="section-title compact"><span>02</span><div><h2>Đánh giá batch</h2><p>Cùng ảnh cho mọi model</p></div></div>
+        <div class="section-title compact"><span>02</span><div><h2>Ảnh ngoài test</h2><p>Chọn ảnh từ máy của bạn</p></div></div>
+        <label class="upload-field">Chọn tối đa 20 ảnh
+          <input id="uploadImages" type="file" accept="image/*" multiple>
+        </label>
+        <div id="uploadSelection" class="upload-selection">Chưa chọn ảnh</div>
+        <button id="uploadButton" class="button quiet full">Đánh giá ảnh đã chọn</button>
+        <p class="control-note">Ảnh chỉ được lưu tạm khi web đang chạy. Vì không có nhãn thật, kết quả sẽ hiển thị “Chưa đối chiếu”.</p>
+
+        <div class="separator"></div>
+        <div class="section-title compact"><span>03</span><div><h2>Đánh giá batch</h2><p>Cùng ảnh cho mọi model</p></div></div>
         <label>Số ảnh (0 = toàn bộ)
           <input id="batchSize" type="number" min="0" step="1" value="100" inputmode="numeric">
         </label>
@@ -69,7 +78,7 @@
 
       <section class="results-panel panel">
         <div class="results-heading">
-          <div class="section-title"><span>03</span><div><h2>Kết quả đánh giá</h2><p id="resultContext">Chưa có lần đánh giá</p></div></div>
+          <div class="section-title"><span>04</span><div><h2>Kết quả đánh giá</h2><p id="resultContext">Chưa có lần đánh giá</p></div></div>
           <div class="result-tools">
             <label>Lọc kết quả model
               <select id="resultCorrectnessFilter">
@@ -108,7 +117,7 @@
         <div id="emptyState" class="empty-state">
           <div class="empty-icon">◎</div>
           <h3>Chưa có ảnh được đánh giá</h3>
-          <p>Dùng bộ lọc bên trái, sau đó đánh giá một ảnh hoặc chạy batch.</p>
+          <p>Dùng ảnh test ngẫu nhiên, chạy batch hoặc chọn ảnh khác từ máy.</p>
         </div>
 
         <div id="loadingState" class="loading-state hidden">
