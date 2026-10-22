@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -15,8 +16,16 @@ def create_run_directory(task, category, model_name, run_name=None):
 
 def write_json(path, payload):
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
         encoding="utf-8",
+    )
+
+
+def _json_default(value):
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    raise TypeError(
+        f"Object of type {value.__class__.__name__} is not JSON serializable"
     )
 
 

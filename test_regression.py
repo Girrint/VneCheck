@@ -21,6 +21,20 @@ class ContractTests(unittest.TestCase):
         )
 
 
+class ExperimentTrackerTests(unittest.TestCase):
+    def test_write_json_serializes_path_values(self):
+        from food_ai.experiment import write_json
+
+        output = Path("config.json")
+        with patch.object(Path, "write_text") as write_text:
+            write_json(output, {"negative_root": Path("data_negative")})
+        serialized = write_text.call_args.args[0]
+        payload = json.loads(serialized)
+
+        write_text.assert_called_once_with(serialized, encoding="utf-8")
+        self.assertEqual(payload["negative_root"], "data_negative")
+
+
 class DatasetSplitTests(unittest.TestCase):
     @staticmethod
     def record(path, class_name, sha256, phash=0):
