@@ -166,10 +166,21 @@ class LocalWebTests(unittest.TestCase):
             "evaluation_available",
             "unified_category_confidence",
             "legacy_pipeline_freshness",
+            "legacy_pipeline_score",
             "legacy_oracle_correct",
             "legacy_router_probability_cu",
         ):
             self.assertIn(field, REPORT_FIELDS)
+
+    def test_legacy_frontend_maps_and_renders_pipeline_score(self):
+        source = (Path("local_web") / "static" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "score: entry.pipeline?.estimated_freshness_score", source
+        )
+        self.assertIn("score: row.legacy_pipeline_score", source)
+        self.assertIn("escapeHtml(data.legacy.score)", source)
 
 
 if __name__ == "__main__":

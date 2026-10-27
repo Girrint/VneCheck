@@ -142,7 +142,10 @@ function modelEvaluationCard(data) {
 
   const legacyPipeline = data.legacy?.category ? `
         <div class="prediction"><small>Category</small><strong>${escapeHtml(labelFor("categories", data.legacy.category))}</strong><span>${percent(data.legacy.categoryConfidence)}</span></div>
-        <div class="prediction"><small>Expert ${escapeHtml(data.legacy.classCount)}</small><strong>${escapeHtml(labelFor("freshness", data.legacy.freshness))}</strong><span>${percent(data.legacy.freshnessConfidence)}</span></div>` : "";
+        <div class="prediction"><small>Expert ${escapeHtml(data.legacy.classCount)}</small><strong>${escapeHtml(labelFor("freshness", data.legacy.freshness))}</strong><span>${percent(data.legacy.freshnessConfidence)}</span></div>
+        ${data.legacy.score !== "" && data.legacy.score !== null && data.legacy.score !== undefined
+          ? `<div class="prediction"><small>Điểm</small><strong>${escapeHtml(data.legacy.score)}</strong><span>/ 10</span></div>`
+          : ""}` : "";
   const legacyOracle = data.legacy?.oracleFreshness ? `
         <div class="prediction"><small>Oracle expert</small><strong>${escapeHtml(labelFor("freshness", data.legacy.oracleFreshness))}</strong><span>${data.legacy.oracleCorrect ? "Đúng" : "Sai"} · ${escapeHtml(data.legacy.oracleClassCount)} lớp</span></div>` : "";
   const legacy = data.legacy ? (data.legacy.available ? `
@@ -259,6 +262,7 @@ function legacyEntryToCard(sample, entry) {
       categoryConfidence: entry.pipeline?.category_confidence,
       freshness: entry.pipeline?.freshness,
       freshnessConfidence: entry.pipeline?.freshness_confidence,
+      score: entry.pipeline?.estimated_freshness_score,
       classCount: entry.pipeline?.class_count,
       jointCorrect: entry.joint_correct,
       oracleFreshness: entry.oracle?.freshness,
@@ -312,6 +316,7 @@ function csvToCard(row) {
       categoryConfidence: row.legacy_router_confidence,
       freshness: row.legacy_pipeline_freshness,
       freshnessConfidence: row.legacy_pipeline_freshness_confidence,
+      score: row.legacy_pipeline_score,
       classCount: row.legacy_pipeline_expert_classes,
       jointCorrect: booleanValue(row.legacy_joint_correct),
       oracleFreshness: row.legacy_oracle_freshness,
