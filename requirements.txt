@@ -1,0 +1,3 @@
+# Install the CUDA-enabled PyTorch wheel first from the official PyTorch index.
+# Then install this file.
+-e .

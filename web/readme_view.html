@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VnECheck README Preview</title>
+    <style>
+      :root { color-scheme: dark; --bg:#071422; --panel:#102333; --line:#284b5e; --text:#f5fbff; --muted:#a9beca; --green:#3ddc97; --blue:#4bb6ff; }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body { margin:0; background:linear-gradient(180deg,#071422,#0a2030); color:var(--text); font-family:Inter,"Segoe UI",sans-serif; }
+      .topbar { position:sticky; top:0; z-index:20; display:flex; justify-content:space-between; align-items:center; padding:18px 64px; background:rgba(7,20,34,.94); border-bottom:1px solid var(--line); backdrop-filter:blur(12px); }
+      .brand { font-weight:800; font-size:25px; letter-spacing:.02em; }
+      .brand span { color:var(--green); }
+      .file { color:var(--muted); font-size:18px; }
+      main { width:min(1320px,calc(100% - 100px)); margin:0 auto; padding:70px 0 180px; }
+      section { min-height:900px; scroll-margin-top:95px; }
+      .eyebrow { color:var(--green); font-size:20px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+      h1 { margin:18px 0 22px; font-size:72px; line-height:1.05; }
+      h2 { margin:12px 0 20px; font-size:52px; }
+      .lead { max-width:980px; margin:0; color:var(--muted); font-size:27px; line-height:1.55; }
+      .hero-card { margin-top:70px; padding:38px 42px; border:1px solid var(--line); border-radius:26px; background:var(--panel); }
+      .hero-card strong { display:block; color:var(--green); font-size:34px; }
+      .hero-card span { display:block; margin-top:10px; color:var(--muted); font-size:23px; }
+      .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:22px; margin-top:44px; }
+      .metric { min-height:210px; padding:30px; border:1px solid var(--line); border-radius:24px; background:var(--panel); }
+      .metric b { display:block; color:var(--green); font-size:50px; }
+      .metric span { display:block; margin-top:18px; color:var(--muted); font-size:21px; line-height:1.35; }
+      .split { margin-top:28px; padding:30px 36px; border-radius:24px; background:var(--panel); border:1px solid var(--line); }
+      table { width:100%; border-collapse:collapse; font-size:22px; }
+      th,td { padding:17px 20px; border-bottom:1px solid #294252; text-align:left; }
+      th { color:var(--muted); }
+      td:nth-child(n+2) { color:var(--green); font-weight:700; }
+      .tree { margin-top:34px; padding:34px 42px; border:1px solid var(--line); border-radius:24px; background:#091a27; color:#dcebf2; font:20px/1.55 "Cascadia Mono",Consolas,monospace; white-space:pre; overflow:hidden; }
+      .tree .accent { color:var(--green); }
+      .caption { position:fixed; left:50%; bottom:28px; z-index:99; transform:translateX(-50%); width:min(1120px,calc(100vw - 80px)); padding:18px 28px; border:1px solid rgba(61,220,151,.75); border-radius:18px; background:rgba(5,20,30,.94); text-align:center; box-shadow:0 18px 55px rgba(0,0,0,.4); }
+      .caption strong { display:block; font-size:28px; }
+      .caption span { display:block; margin-top:6px; color:#b8ccd7; font-size:18px; }
+      @media (max-width:1100px) { .grid { grid-template-columns:repeat(2,1fr); } h1{font-size:58px;} }
+    </style>
+  </head>
+  <body>
+    <header class="topbar"><div class="brand"><span>VnECheck</span> Project Documentation</div><div class="file">README.md · Preview</div></header>
+    <main>
+      <section id="overview">
+        <div class="eyebrow">Tổng quan dự án</div>
+        <h1>Nhận diện và đánh giá chất lượng rau củ trái cây</h1>
+        <p class="lead">Hệ thống hai tầng sử dụng YOLO11l để phát hiện 10 loại sản phẩm, sau đó định tuyến từng ROI đến bộ phân loại Fresh hoặc Rotten.</p>
+        <div class="hero-card"><strong>Phiên bản thực nghiệm đang hoạt động e30</strong><span>1 detector YOLO11l + 30 classifier · toàn bộ đã xuất ONNX cho giao diện web</span></div>
+      </section>
+
+      <section id="data">
+        <div class="eyebrow">README · Dữ liệu hiện tại</div>
+        <h2>Quy mô dữ liệu đã chuẩn hóa</h2>
+        <p class="lead">Dataset nguồn, detection, classification ROI và tập kiểm thử end-to-end được tổ chức riêng theo đúng mục đích huấn luyện và đánh giá.</p>
+        <div class="grid">
+          <div class="metric"><b>11.696</b><span>ảnh nguồn thuộc train, validation và test</span></div>
+          <div class="metric"><b>21.272</b><span>bounding box nguồn sau khi audit</span></div>
+          <div class="metric"><b>21.185</b><span>ROI Fresh / Rotten dùng để train CNN</span></div>
+          <div class="metric"><b>371</b><span>ảnh dành cho benchmark end-to-end</span></div>
+        </div>
+        <div class="split">
+          <table>
+            <thead><tr><th>Tập detection</th><th>Train</th><th>Validation</th><th>Test</th></tr></thead>
+            <tbody><tr><td>Số ảnh</td><td>8.137</td><td>1.786</td><td>1.773</td></tr><tr><td>Mục đích</td><td>Huấn luyện</td><td>Chọn mô hình</td><td>Đánh giá cuối</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="structure">
+        <div class="eyebrow">README · Cấu trúc dự án</div>
+        <h2>Tổ chức dữ liệu mô hình và báo cáo</h2>
+        <p class="lead">Các thư mục đang dùng đều theo tên chuẩn; model và báo cáo hiện hành chỉ sử dụng phiên bản e30.</p>
+        <div class="tree">VneCheck_YoLo/
+├── configs/                     cấu hình lớp và huấn luyện
+├── data/                        dữ liệu nguồn đang hoạt động
+├── datasets/
+│   ├── detection/               ảnh và nhãn YOLO 10 lớp
+│   ├── classification/          ROI Fresh / Rotten cho CNN
+│   └── e2e/                     dữ liệu kiểm thử end-to-end
+├── runs/
+│   ├── detection/               checkpoint YOLO11l e30
+│   └── classification/          30 checkpoint classifier
+├── reports/                     kết quả test và thống kê e30
+├── web/                         giao diện ONNX Runtime Web
+├── scripts/                     công cụ chuẩn bị và đánh giá
+└── tests/                       unit test của pipeline</div>
+      </section>
+    </main>
+    <div class="caption"><strong>README dự án VnECheck</strong><span>Giới thiệu dữ liệu hiện tại và cấu trúc trước khi chạy demo</span></div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const captionTitle = document.querySelector('.caption strong');
+      const captionDetail = document.querySelector('.caption span');
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      async function playReadmeTour() {
+        if (params.get('record') !== '1') return;
+        await wait(9000);
+        captionTitle.textContent = 'Dữ liệu hiện tại';
+        captionDetail.textContent = '11.696 ảnh nguồn · 21.272 bounding box · 21.185 ROI cho CNN';
+        document.querySelector('#data').scrollIntoView({ behavior: 'smooth' });
+        await wait(13000);
+        captionTitle.textContent = 'Cấu trúc dự án';
+        captionDetail.textContent = 'Dữ liệu · checkpoint e30 · báo cáo · giao diện web được tách rõ ràng';
+        document.querySelector('#structure').scrollIntoView({ behavior: 'smooth' });
+        await wait(15000);
+        captionTitle.textContent = 'Chuyển sang demo hệ thống';
+        captionDetail.textContent = 'Chạy inference thật trên sáu ảnh từ Downloads/test';
+        await wait(4000);
+        location.href = './?record=1';
+      }
+      playReadmeTour();
+    </script>
+  </body>
+</html>

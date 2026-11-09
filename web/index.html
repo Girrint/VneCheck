@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="VnECheck phân tích độ tươi rau củ quả bằng YOLO11l và các mô hình phân loại ONNX ngay trên trình duyệt." />
+    <title>VnECheck · Fresh &amp; Clean AI Dashboard</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Chuyển đến nội dung chính</a>
+
+    <header class="app-toolbar">
+      <div class="toolbar-inner">
+        <a class="brand" href="#main-content" aria-label="VnECheck — bảng điều khiển chính">
+          <span class="brand-mark" aria-hidden="true">V</span>
+          <span class="brand-copy"><strong>VnECheck</strong><small>FRESH &amp; CLEAN AI</small></span>
+        </a>
+
+        <div class="runtime-chip" role="status" aria-live="polite">
+          <span class="pulse" aria-hidden="true"></span>
+          <span id="runtime-status">Đang kiểm tra runtime</span>
+        </div>
+
+        <div class="toolbar-actions" aria-label="Công cụ phân tích">
+          <input id="image-input" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Chọn một hoặc nhiều ảnh thực phẩm" />
+          <button class="tool-button" id="add-images" type="button" aria-controls="image-input">
+            <span aria-hidden="true">＋</span><span>Thêm ảnh</span>
+          </button>
+          <button class="tool-button tool-button-primary" id="run-button" type="button" aria-describedby="image-meta progress-text" aria-busy="false" disabled>
+            <span id="run-button-label">Phân tích</span><b aria-hidden="true">→</b>
+          </button>
+
+          <details class="toolbar-settings" id="advanced-settings">
+            <summary class="tool-button" aria-label="Mở cài đặt nâng cao"><span aria-hidden="true">⚙</span><span>Cài đặt</span></summary>
+            <div class="settings-popover">
+              <div class="popover-heading"><div><small>INFERENCE SETTINGS</small><h2>Cài đặt phân tích</h2></div><span id="settings-model-count">31 ONNX</span></div>
+
+              <label class="field" id="architecture-field">
+                <span>Classifier</span>
+                <select id="architecture">
+                  <option value="all">So sánh cả 3 mô hình</option>
+                  <option value="mobilenet_v3_large">MobileNetV3-Large</option>
+                  <option value="resnet18">ResNet-18</option>
+                  <option value="efficientnet_b0">EfficientNet-B0</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Execution provider</span>
+                <select id="provider"><option value="webgpu">WebGPU (ưu tiên)</option><option value="wasm">WebAssembly</option></select>
+              </label>
+
+              <label class="field" id="repeats-field">
+                <span>Số lần đo <output id="repeat-value">3</output></span>
+                <input id="repeats" type="range" min="1" max="10" value="3" aria-label="Số lần đo classifier" />
+              </label>
+
+              <label class="field" id="confidence-field">
+                <span>Confidence <output id="confidence-value">0.25</output></span>
+                <input id="confidence" type="range" min="0.05" max="0.90" value="0.25" step="0.05" aria-label="Ngưỡng confidence YOLO" />
+              </label>
+
+              <label class="field" id="iou-field">
+                <span>IoU NMS <output id="iou-value">0.45</output></span>
+                <input id="iou" type="range" min="0.10" max="0.90" value="0.45" step="0.05" aria-label="Ngưỡng IoU NMS" />
+              </label>
+
+              <label class="toggle-row" id="demo-field">
+                <span><b>Demo giao diện</b><small id="demo-description">Dùng dữ liệu mô phỏng khi chưa có model</small></span>
+                <input id="demo-mode" type="checkbox" role="switch" aria-describedby="demo-description" /><i aria-hidden="true"></i>
+              </label>
+
+              <div class="model-notice" id="model-notice">Đang kiểm tra các model ONNX…</div>
+              <div class="model-health" id="model-health" aria-label="Tình trạng model">
+                <span><b id="detector-count">0/1</b><small>Detector</small></span>
+                <span><b id="classifier-count">0/30</b><small>Classifier</small></span>
+              </div>
+            </div>
+          </details>
+
+          <div class="toolbar-export" role="group" aria-label="Xuất kết quả">
+            <button id="export-json" type="button" disabled>JSON</button>
+            <button id="export-csv" type="button" disabled>CSV</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-main" id="main-content">
+      <div class="dashboard-heading">
+        <div><span>AI FOOD FRESHNESS</span><h1>Phân tích thực phẩm</h1></div>
+        <p>YOLO11l phát hiện đối tượng, sau đó các classifier đánh giá Fresh / Rotten hoàn toàn trên trình duyệt.</p>
+      </div>
+
+      <nav class="tab-navigation" role="tablist" aria-label="Khu vực làm việc VnECheck">
+        <button id="tab-detection" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="panel-detection" tabindex="0" data-tab="detection">
+          <span class="tab-index">01</span><span><b>Nhận diện</b><small>Upload · YOLO · ROI</small></span><em id="detection-tab-count">0</em>
+        </button>
+        <button id="tab-results" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-results" tabindex="-1" data-tab="results">
+          <span class="tab-index">02</span><span><b>Kết quả AI</b><small>Fresh / Rotten</small></span><em id="results-tab-count">0</em>
+        </button>
+        <button id="tab-benchmark" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-benchmark" tabindex="-1" data-tab="benchmark">
+          <span class="tab-index">03</span><span><b>Benchmark</b><small>So sánh mô hình</small></span><em id="benchmark-tab-count">0</em>
+        </button>
+      </nav>
+
+      <div class="global-image-strip result-batch-strip" id="result-batch-strip" hidden aria-label="Chọn ảnh trong lô"></div>
+
+      <section class="tab-panel detection-tab-panel" id="panel-detection" role="tabpanel" aria-labelledby="tab-detection" tabindex="0">
+        <div class="detection-layout">
+          <section class="stage-card" aria-labelledby="detection-stage-title" aria-busy="false">
+            <div class="card-heading compact-heading">
+              <div><span>YOLO11L WORKSPACE</span><h2 id="detection-stage-title">Ảnh và bounding box</h2></div>
+              <span class="image-meta" id="image-meta">Chưa chọn ảnh</span>
+            </div>
+
+            <div class="drop-zone" id="drop-zone">
+              <button class="upload-idle" id="upload-idle" type="button" aria-controls="image-input">
+                <span class="upload-icon" aria-hidden="true">↑</span>
+                <strong>Thả ảnh vào đây</strong>
+                <small>JPG, PNG, WebP · tối đa 20 ảnh · 20 MB/ảnh</small>
+              </button>
+              <canvas id="preview-canvas" role="img" aria-label="Ảnh đang chọn và bounding box YOLO"></canvas>
+              <button class="clear-image" id="clear-image" type="button" aria-label="Xóa toàn bộ ảnh">×</button>
+            </div>
+
+            <div class="progress-wrap" id="progress-wrap" hidden role="status" aria-live="polite">
+              <div class="progress-line" id="progress-line" role="progressbar" aria-label="Tiến độ phân tích hiện tại" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progress-bar"></i></div>
+              <span id="progress-text">Đang chuẩn bị…</span>
+            </div>
+          </section>
+
+          <aside class="queue-card" aria-labelledby="batch-list-title">
+            <div class="card-heading compact-heading queue-heading">
+              <div><span>IMAGE QUEUE</span><h2 id="batch-list-title">Danh sách ảnh</h2></div><b id="batch-count">0</b>
+            </div>
+
+            <div class="batch-list" id="batch-list" hidden>
+              <div class="batch-list-items" id="batch-strip" role="list" aria-label="Danh sách ảnh đã chọn"></div>
+            </div>
+            <div class="queue-empty" id="queue-empty"><span aria-hidden="true">□</span><p>Ảnh được thêm sẽ xuất hiện tại đây.</p></div>
+
+            <div class="batch-summary" id="batch-summary" hidden aria-live="polite" aria-atomic="true">
+              <div class="batch-summary-metrics">
+                <span><small>Tổng</small><b id="batch-total">0</b></span>
+                <span><small>Đã xử lý</small><b id="batch-processed">0</b></span>
+                <span><small>Lỗi</small><b id="batch-failed">0</b></span>
+              </div>
+              <div class="batch-summary-progress" id="batch-summary-progress" role="progressbar" aria-label="Tiến độ xử lý toàn bộ lô ảnh" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="batch-summary-bar"></i></div>
+            </div>
+
+            <div class="batch-errors" id="batch-errors" hidden role="alert" aria-live="polite">
+              <div class="batch-errors-heading"><strong>Ảnh cần kiểm tra</strong><span id="batch-error-count">0</span></div>
+              <ul id="batch-error-list"></ul>
+            </div>
+          </aside>
+        </div>
+
+        <section class="roi-tray" id="detection-output" aria-labelledby="roi-tray-title" hidden>
+          <div class="card-heading compact-heading"><div><span>DETECTED ROI</span><h2 id="roi-tray-title">Đối tượng đã phát hiện</h2></div><small id="box-count-label">0 ROI</small></div>
+          <div class="crop-gallery" id="crop-gallery" role="group" aria-label="Các ROI đã phát hiện"></div>
+        </section>
+
+        <div class="tab-empty" id="detection-empty" role="status">
+          <span aria-hidden="true">⌁</span><div><b>Chưa có ROI</b><p>Thêm ảnh và nhấn “Phân tích” để chạy YOLO cùng classifier.</p></div>
+        </div>
+      </section>
+
+      <section class="tab-panel results-tab-panel" id="panel-results" role="tabpanel" aria-labelledby="tab-results" tabindex="0" hidden>
+        <div class="empty-results" id="empty-results" role="status" aria-live="polite">
+          <span aria-hidden="true">AI</span><h2>Chưa có kết quả AI</h2><p>Hoàn tất phân tích ở tab Nhận diện để xem kết quả Fresh / Rotten.</p>
+        </div>
+
+        <div class="results-workspace" id="result-content" role="region" aria-label="Kết quả phân tích thực phẩm" hidden>
+          <section class="ai-items-card" aria-labelledby="ai-items-title">
+            <div class="card-heading compact-heading"><div><span>DETECTED ITEMS</span><h2 id="ai-items-title">Thực phẩm trong ảnh</h2></div><small>Chọn để xem chi tiết</small></div>
+            <div class="ai-items-grid" id="ai-items-grid" role="group" aria-label="Các thực phẩm đã phát hiện"></div>
+          </section>
+
+          <section class="selected-item-section" aria-labelledby="selected-item-title">
+            <div class="card-heading compact-heading"><div><span>SELECTED ITEM</span><h2 id="selected-item-title">Kết quả đối tượng đang chọn</h2></div></div>
+            <div id="selected-item-detail" class="selected-item-detail" aria-live="polite"></div>
+          </section>
+
+          <section class="ai-model-section" aria-labelledby="ai-model-title">
+            <div class="card-heading compact-heading"><div><span>SELECTED MODELS</span><h2 id="ai-model-title">Dự đoán và xác suất</h2></div><span id="ai-mode-badge">MODEL OUTPUT</span></div>
+            <div class="ai-model-list" id="ai-model-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel benchmark-tab-panel" id="panel-benchmark" role="tabpanel" aria-labelledby="tab-benchmark" tabindex="0" hidden>
+        <div class="benchmark-empty tab-empty" id="benchmark-empty" role="status">
+          <span aria-hidden="true">Δ</span><div><b>Chưa có dữ liệu benchmark</b><p>Benchmark sử dụng report đã tạo, không chạy lại model khi chuyển tab.</p></div>
+        </div>
+
+        <div class="benchmark-workspace" id="benchmark-output" hidden>
+          <section class="benchmark-card" aria-labelledby="comparison-title">
+            <div class="card-heading compact-heading">
+              <div><span>MODEL COMPARISON</span><h2 id="comparison-title">EfficientNet · MobileNet · ResNet</h2></div><span id="benchmark-badge">REAL INFERENCE</span>
+            </div>
+            <div class="benchmark-roi-list" id="benchmark-roi-list"></div>
+          </section>
+
+          <section class="benchmark-table-card" id="benchmark-table" hidden aria-labelledby="benchmark-table-title">
+            <div class="card-heading compact-heading"><div><span>ALL PREDICTIONS</span><h2 id="benchmark-table-title">Chi tiết hiệu năng</h2></div><small>Latency không gồm thời gian tải model</small></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>#</th><th>Đối tượng</th><th>Kiến trúc</th><th>Kết quả</th><th>Confidence</th><th>P(Fresh)</th><th>P(Rotten)</th><th>ONNX</th><th>Val F1</th><th>Load</th><th>Latency TB</th></tr></thead>
+                <tbody id="benchmark-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <details class="technical-details" id="technical-details">
+            <summary><span><small>ADVANCED TECHNICAL DETAILS</small><b>Detection, classification và runtime settings</b></span><i aria-hidden="true">+</i></summary>
+            <div class="technical-details-body">
+              <details class="technical-group" id="detection-details" open>
+                <summary><span><small>01</small><b>Detection details</b><em>YOLO, ROI và ảnh đầu vào</em></span><i aria-hidden="true">+</i></summary>
+                <div class="technical-group-body"><div class="summary-grid" id="detection-summary-grid"></div></div>
+              </details>
+              <details class="technical-group" id="classification-details">
+                <summary><span><small>02</small><b>Classification details</b><em>Số prediction và thời gian classifier</em></span><i aria-hidden="true">+</i></summary>
+                <div class="technical-group-body"><div class="summary-grid" id="classification-summary-grid"></div></div>
+              </details>
+              <details class="technical-group" id="runtime-details">
+                <summary><span><small>03</small><b>Runtime and settings</b><em>Provider, threshold và tổng thời gian</em></span><i aria-hidden="true">+</i></summary>
+                <div class="technical-group-body"><div class="summary-grid" id="runtime-summary-grid"></div></div>
+              </details>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer"><span>VnECheck · ONNX Runtime Web</span><span>Ảnh được xử lý cục bộ trên thiết bị</span></footer>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js" crossorigin="anonymous"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

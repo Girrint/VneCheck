@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vnecheck-training"
+version = "0.1.0"
+description = "Reproducible two-stage training pipeline for VneCheck"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "ultralytics>=8.3,<9",
+  "opencv-python>=4.10,<5",
+  "pillow>=10,<13",
+  "numpy>=1.26,<3",
+  "matplotlib>=3.9,<4",
+  "scikit-learn>=1.5,<2",
+  "pyyaml>=6,<7",
+  "onnx>=1.17,<2",
+  "onnxruntime-gpu>=1.20,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+vnecheck-audit = "vnecheck.data.audit:main"
+vnecheck-prepare-detection = "vnecheck.data.prepare_detection:main"
+vnecheck-crop-rois = "vnecheck.data.crop_rois:main"
+vnecheck-train-detector = "vnecheck.detection.train:main"
+vnecheck-eval-detector = "vnecheck.detection.evaluate:main"
+vnecheck-train-classifiers = "vnecheck.classification.train:main"
+vnecheck-eval-classifiers = "vnecheck.classification.evaluate:main"
+vnecheck-train-all = "vnecheck.train_all:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

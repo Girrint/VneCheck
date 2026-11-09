@@ -1,0 +1,37 @@
+.venv/
+.codex_tmp/
+.source_git/
+/.git/
+.tmp/
+tmp*/
+.ultralytics/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated datasets and training artifacts
+/data/
+/datasets/
+/runs/
+/reports/
+/outputs/
+/docx/
+/weights/
+*.pt
+*.onnx
+*.engine
+
+# Web artifacts and local demo media
+/web/models/
+/web/demo_assets/
+
+# Ultralytics cache files
+*.cache
+
+# Editors and OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
